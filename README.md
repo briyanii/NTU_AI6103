@@ -20,7 +20,7 @@ ssh -p 22 <networkID>@<serverIP>
 ```
 - if you enter an incorrect password multiple times (3?) you may have to wait a while to try again
 
-5. **(Optional) update `~/.ssh/authorized_keys`**
+5. **(Optional, Once) update `~/.ssh/authorized_keys`**
 
 - create `~/.ssh` directory if it doesn't exist
 ```
