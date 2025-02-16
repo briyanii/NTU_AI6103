@@ -61,11 +61,20 @@ ssh <alias>
 # SSH Tunneling
 To access jupyter notebook service or other remote services, you can do local port forwarding.
 ```
-# on local
-ssh -L <localport>:localhost:<remoteport> <networkId>:<serverIP> -N
+# on remote
+juypter lab
 ```
+- take note of the port in the url it gives 
+- e.g. `http://localhost:8890/lab?token=<token>`
 
-- on your browser you can access `http://localhost:<remoteport>` by entering `http://localhost:<localport> on your browser`
+```
+# on local
+ssh -L <localport>:localhost:<remoteport> -p 22 <networkId>:<serverIP>
+
+# if you modified .ssh/config to allow ssh with an alias
+ssh -L <localport>:localhost:<remoteport> <alias>
+```
+- to connect to `http://localhost:8890/lab?token=<token>`, enter `http://localhost:<localport>/lab?token=<token>' on your local browser
 
 # Running SLURM jobs on GPU nodes
 refer to https://www3.ntu.edu.sg/scse/fyp/UsefulInfo/SCSEGPU-TC1-UG-UserGuide.pdf
