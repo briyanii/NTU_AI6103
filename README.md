@@ -73,8 +73,11 @@ ssh -L <localport>:localhost:<remoteport> -p 22 <networkId>:<serverIP>
 
 # if you modified .ssh/config to allow ssh with an alias
 ssh -L <localport>:localhost:<remoteport> <alias>
+
+# e.g.
+ssh -L 8080:localhost:8890 <alias>
 ```
-- to connect to `http://localhost:8890/lab?token=<token>`, enter `http://localhost:<localport>/lab?token=<token>' on your local browser
+- to connect to `http://localhost:8890/lab?token=<token>`, enter `http://localhost:8080/lab?token=<token>` on your local browser
 
 # Running SLURM jobs on GPU nodes
 refer to https://www3.ntu.edu.sg/scse/fyp/UsefulInfo/SCSEGPU-TC1-UG-UserGuide.pdf
