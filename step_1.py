@@ -24,7 +24,7 @@ with open(state_dict_path, 'wb') as fp:
 	print('saved', state_dict_path)
 
 print('step_1_generate')
-proposals = generate_rpn_proposals(model1, dataset, device=device, topN=2000, nms_th=.7, breakpoint=10)
+proposals = generate_rpn_proposals(model1, dataset, device=device, topN=2000, nms_th=.7)
 print('step_1_generate complete')
 
 with open(proposal_path, 'wb') as fp:

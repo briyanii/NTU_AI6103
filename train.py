@@ -158,6 +158,7 @@ of 0.1 appears to act as a heuristic for hard example mining
 [8]. During training, images are horizontally flipped with
 probability 0.5. No other data augmentation is used
 '''
+
 def train_fastrcnn_net(model, dataset, steps=30000+10000, **kwargs):
 	device = kwargs['device']
 	model = model.to(device)
