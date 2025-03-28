@@ -1,0 +1,9 @@
+submit.py
+*.swp
+
+__pycache__/*
+.ipynb_checkpoints/*
+outputs/*
+data/*
+tmp/*
+
