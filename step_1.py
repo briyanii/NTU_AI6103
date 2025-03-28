@@ -1,6 +1,6 @@
 from models import RPN
 from config import cfg_1, cfg_3
-from train import train_rpn_net
+from train import train_rpn_net, generate_rpn_proposals
 from dataset import VOCDataset
 import pickle
 import torch
