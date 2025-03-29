@@ -27,7 +27,7 @@ def iou(box1, box2):
     union = area1 + area2 - intersection
     
     # Compute IoU
-    iou = intersection / union
+    iou = intersection / union.clamp(min=1e-6)  # Avoid division by zero
     return iou
     
 
@@ -41,31 +41,33 @@ def compute_iou(boxes1, boxes2):
     Returns:
         Tensor: IoU matrix of shape (N, M), where IoU[i, j] is IoU of boxes1[i] with boxes2[j]
     """
+    N = boxes1.size(0)
+    M = boxes2.size(0)
+
     # Extract box coordinates
-    x1_1, y1_1, x2_1, y2_1 = boxes1[:, 0], boxes1[:, 1], boxes1[:, 2], boxes1[:, 3]  # Shape: (N,)
-    x1_2, y1_2, x2_2, y2_2 = boxes2[:, 0], boxes2[:, 1], boxes2[:, 2], boxes2[:, 3]  # Shape: (M,)
-    
+    x1_1, y1_1, x2_1, y2_1 = boxes1.unsqueeze(1).unbind(dim=2) # Shapes (N, 1)
+    x1_2, y1_2, x2_2, y2_2 = boxes2.unsqueeze(0).unbind(dim=2) # Shapes (1, M)
+
     # Compute intersection (top-left and bottom-right corners)
-    inter_x1 = torch.max(x1_1[:, None], x1_2[None, :])  # Shape: (N, M)
-    inter_y1 = torch.max(y1_1[:, None], y1_2[None, :])
-    inter_x2 = torch.min(x2_1[:, None], x2_2[None, :])
-    inter_y2 = torch.min(y2_1[:, None], y2_2[None, :])
-    
+    inter_x1 = torch.max(x1_1, x1_2)
+    inter_y1 = torch.max(y1_1, y1_2)
+    inter_x2 = torch.min(x2_1, x2_2)
+    inter_y2 = torch.min(y2_1, y2_2)
+
     # Compute intersection area
     inter_w = (inter_x2 - inter_x1).clamp(min=0)  # Width cannot be negative
     inter_h = (inter_y2 - inter_y1).clamp(min=0)
     intersection = inter_w * inter_h  # Shape: (N, M)
-    
+
     # Compute area of both sets of boxes
-    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)  # Shape: (N,)
-    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)  # Shape: (M,)
-    
+    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)  # Shape: (N,1)
+    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)  # Shape: (1,M)
+
     # Compute union area
-    union = area1[:, None] + area2[None, :] - intersection  # Shape: (N, M)
-    
+    union = area1 + area2 - intersection  # Shape: (N, M)
+
     # Compute IoU
     iou = intersection / union.clamp(min=1e-6)  # Avoid division by zero
-    
     return iou
 
 def sample_rois(proposals, gt_bbox, pos_th, neg_th_lo, neg_th_hi, sample_size, pos_ratio):
@@ -101,45 +103,36 @@ def sample_rois(proposals, gt_bbox, pos_th, neg_th_lo, neg_th_hi, sample_size, p
 
     return samples, sample_indices, sample_labels, sample_gt_idx
 
-    
-    
 def sample_anchors(anchors, gt, lo_th, hi_th, sample_size):
-    pos_sample_size = sample_size//2
+    # prereq: both anchors and gt on same device
     ious = compute_iou(anchors, gt)
 
     # assign pos / neg labels
-    case_0 = ious.argmax(dim=0).to(anchors.device)
-    case_1 = (ious > hi_th).any(dim=1).to(anchors.device)
-    case_2 = (ious < lo_th).all(dim=1).to(anchors.device)
-    labels = torch.where(case_2, -1, 0).to(anchors.device)
-    labels = torch.where(case_1, 1, labels)
-    labels[case_0] = 1
-    
-    is_pos = (labels == 1)
-    is_neg = (labels == -1)
+    max_iou_per_anchor, gt_index_per_anchor = ious.max(dim=1)
+    anchor_index_per_gt = ious.argmax(dim=0)
+
+    is_pos = max_iou_per_anchor > hi_th
+    is_neg = max_iou_per_anchor < lo_th
+    is_pos[anchor_index_per_gt] = True
+    is_neg[anchor_index_per_gt] = False
+
     n_pos = is_pos.sum()
     n_neg = is_neg.sum()
-    
-    # sample up to n//2
-    pos_idx = torch.randperm(n_pos, device=anchors.device)
-    pos_idx = pos_idx[:pos_sample_size]
-    pos_idx = torch.where(labels==+1)[0][pos_idx]
-    pos_sample_size = pos_idx.size(0)
-    # sample remaining to make up to n
-    neg_idx = torch.randperm(n_neg, device=anchors.device)
-    neg_idx = neg_idx[:sample_size - pos_sample_size]
-    neg_idx = torch.where(labels==-1)[0][neg_idx]
-    
-    neg_anchors = anchors[neg_idx]
-    pos_anchors = anchors[pos_idx]
-    
-    sampled_anchors = torch.cat([pos_anchors, neg_anchors], dim=0)
-    sampled_indices = torch.cat([pos_idx, neg_idx], dim=0)
-    sampled_labels = labels[sampled_indices]
-    sampled_labels = torch.where(sampled_labels==1, 1, 0).to(anchors.device)
-    sampled_gt_idx = ious[sampled_indices].argmax(dim=1)
-    
-    return sampled_anchors, sampled_indices, sampled_labels, sampled_gt_idx
+
+    pos_sample_size = min(n_pos.item(), sample_size//2)
+    neg_sample_size = sample_size - pos_sample_size
+
+    pos_idx = torch.where(is_pos)[0]
+    neg_idx = torch.where(is_neg)[0]
+    pos_idx = pos_idx[torch.randperm(n_pos)[:pos_sample_size]]
+    neg_idx = neg_idx[torch.randperm(n_neg)[:neg_sample_size]]
+
+    sample_idx = torch.cat([pos_idx, neg_idx])
+    gt_idx = gt_index_per_anchor[sample_idx]
+    objectness = torch.zeros_like(sample_idx)
+    objectness[:n_pos] = 1
+
+    return sample_idx, gt_idx, objectness
 
 def get_anchor_dims(areas, ratios):
     '''
@@ -179,6 +172,7 @@ def get_anchor_origins(ft_w, ft_h, stride_len):
     origin_x, origin_y = torch.meshgrid(origin_x, origin_y, indexing='ij')
     origin_x = origin_x.ravel()
     origin_y = origin_y.ravel()
+
     anchor_origins = torch.vstack([origin_x, origin_y]) + stride_len / 2
     return anchor_origins.T
 
@@ -247,7 +241,7 @@ def clip_bboxes(bboxes, im_w, im_h):
     bboxes[:, 1] = torch.clamp(bboxes[:, 1], 0, im_h)
     bboxes[:, 2] = torch.clamp(bboxes[:, 2], 0, im_w)
     bboxes[:, 3] = torch.clamp(bboxes[:, 3], 0, im_h)
-    
+
     return bboxes
 
 
@@ -255,6 +249,12 @@ def drop_cross_boundary_boxes(bboxes, im_w, im_h):
     '''
     drop cross-boundary bounding boxes
     '''
-    condition = (bboxes[:,0]>=0) & (bboxes[:,1]>=0) & (bboxes[:,2]<=im_w) & (bboxes[:,3]<=im_h)
-    bboxes = bboxes[condition]
-    return bboxes
+    bboxes = bboxes.cpu()
+
+    lower_bnd = torch.zeros((4,))
+    upper_bnd = torch.Tensor([im_w, im_h, im_w, im_h])
+    condition = (bboxes >= lower_bnd) & (bboxes <= upper_bnd)
+
+    idx = torch.where(condition)[0]
+
+    return idx

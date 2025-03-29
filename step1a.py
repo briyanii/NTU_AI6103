@@ -7,6 +7,7 @@ from datatypes import Rpn_cfg, Anchor_cfg
 from models import RPN, RPNLoss_v2
 from dataset import VOCDataset
 import torch
+import sys
 import glob
 import os
 
@@ -17,9 +18,6 @@ checkpoint_filename_template = './outputs/checkpoint_step1_{step}.pt'
 class TrainerStep1(Trainer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-    def before_step(self, step):
-        pass
 
     def after_step(self, step, loss):
         if loss.isnan():
@@ -53,11 +51,14 @@ k = len(areas) * len(ratios)
 cfg_1 = Rpn_cfg(3, 512, k, 0.0, 0.01)
 cfg_2 = Anchor_cfg(areas, ratios, stride_len, .3, .7, 256)
 
+lr_0 = 0.001
+lr_1 = 0.0001
+
 def lr_lambda(step):
     if step < 60000:
-        return 0.001
+        return lr_0
     else:
-        return 0.0001
+        return lr_1
 
 
 def load_latest_checkpoint(trainer):
@@ -101,13 +102,16 @@ if __name__ == '__main__':
     model = RPN(cfg_1, cfg_2)
     model = model.to(device)
 
-    # paper says tofine tune entire thing, but freeze first few conv layers before max pool anyway
+    # freeze up to conv3_1
+    conv_block_id = 1
     for m in model.features.parameters():
-        m.requires_grad = False
         if isinstance(m, MaxPool2d):
-            break
+            conv_block_id += 1
+            if conv_block_id == 3:
+                break
+        m.requires_grad = False
 
-    optimizer = SGD(model.parameters(), lr=0.001, weight_decay=0.0005, momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=lr_0, weight_decay=0.0005, momentum=0.9)
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
     criterion = RPNLoss_v2(10)
     dataset = VOCDataset('trainval')
@@ -123,6 +127,7 @@ if __name__ == '__main__':
         dataloader_samples=total_steps,
         dataloader_seed=54321,
         collate_fn=collate_fn,
+        accumulation_steps=1,
     )
 
     load_latest_checkpoint(trainer)

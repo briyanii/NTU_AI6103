@@ -50,7 +50,7 @@ def roi_pool(x, rois, W=7, H=7, scale=1/16):
         batch_idx = indices[i]
         y1, x1, y2, x2 = bboxes[i].tolist()
         roi_ft = x[batch_idx:batch_idx+1, :, y1:y2+1, x1:x2+1]
-        
+
         # pad RoI
         ft_h = roi_ft.size(2)
         ft_w = roi_ft.size(3)
@@ -59,7 +59,7 @@ def roi_pool(x, rois, W=7, H=7, scale=1/16):
         padding_w = num_window_w*W - ft_w
         padding_h = num_window_h*H - ft_h
         padded = F.pad(roi_ft, (0, padding_w, 0, padding_h), 'constant', 0)
-        
+
         # compute max pool over HxW sub windows
         windows = F.unfold(padded, kernel_size=(H,W), stride=(H,W))
         # unfold: N, C, * -> N, C*k*k, number_of_windows
@@ -129,18 +129,11 @@ class AnchorGenerator(Module):
         self.hi_th = cfg.hi_th
         self.n = cfg.n
 
-    def forward(self, x):
-        ft_h, ft_w = x.size()[-2:]
+    def forward(self, ft_h, ft_w):
         anchor_origins = U.get_anchor_origins(ft_w, ft_h, self.stride_len)
-        anchor_origins = anchor_origins.to(x.device)
-        anchor_dims = self.anchor_dims.to(x.device)
+        anchor_dims = self.anchor_dims
         anchors = U.merge_anchor_origin_and_dim(anchor_origins, anchor_dims)
-        anchors = anchors.to(x.device)
         return anchors
-
-    def sample(self, anchors, gt):
-        sampled_anchors, sampled_indices, sampled_labels, sampled_gt_idx = U.sample_anchors(anchors, gt, self.lo_th, self.hi_th, self.n)
-        return sampled_anchors, sampled_indices, sampled_labels, sampled_gt_idx
 
 class StandaloneAnchorGenerator(AnchorGenerator):
     def __init__(self, cfg):
@@ -151,7 +144,7 @@ class StandaloneAnchorGenerator(AnchorGenerator):
     def forward(self, x):
         with torch.no_grad():
             x = self.pooling_only(x)
-            outputs = super().forward(x)
+            outputs = super().forward(x.size(2), x.size(3))
             return outputs
 
 class DetectionHead(Module):
@@ -191,18 +184,35 @@ class RPNHead(Module):
             init_weights.normal_(m.weight, mean=cfg.init_mean, std=cfg.init_std)
 
     def forward(self, x):
-        B = x.size(0)
+        if x.isnan().any():
+            print("NaN found after rpn_input")
 
+        B = x.size(0)
         x = self.conv(x)
+        if x.isnan().any():
+            print("NaN found after rpn_conv_1")
         x = self.relu(x)
+        if x.isnan().any():
+            print("NaN found after rpn_relu")
+
         cls_logits = self.cls(x)
-        # cls_logits = cls_logits.permute(0,2,3,1).reshape(B, -1, 2)
-        cls_logits = cls_logits.permute(0,2,3,1).contiguous().view(B, -1, 2)
+        if cls_logits.isnan().any():
+            print("NaN found after rpn_cls")
+
+        cls_logits = cls_logits.permute(0,2,3,1).reshape(B, -1, 2)
+        cls_logits = cls_logits - cls_logits.max(dim=2, keepdim=True)[0]# Prevent overflow
+
+
+        #cls_logits = cls_logits.permute(0,2,3,1).contiguous().view(B, -1, 2)
         cls_softmax = F.softmax(cls_logits, dim=2)
+        if cls_softmax.isnan().any():
+            print("NaN found after rpn_softmax")
 
         bbox_reg = self.bbox(x)
-        # bbox_reg = bbox_reg.permute(0,2,3,1).reshape(B, -1, 4)
-        bbox_reg = bbox_reg.permute(0,2,3,1).contiguous().view(B, -1, 4)
+        if bbox_reg.isnan().any():
+            print("NaN found after rpn_bbox")
+        bbox_reg = bbox_reg.permute(0,2,3,1).reshape(B, -1, 4)
+        #bbox_reg = bbox_reg.permute(0,2,3,1).contiguous().view(B, -1, 4)
 
         return TripleOutput(cls_logits, cls_softmax, bbox_reg)
 
@@ -221,7 +231,9 @@ class RPN(Module):
         cls_logits = outputs.cls_logits
         cls_softmax = outputs.cls_softmax
         bbox_reg = outputs.bbox_reg
-        anchors = self.anchor_layer(x)
+        anchors = self.anchor_layer(x.size(2), x.size(3))
+        anchors = anchors.to(x.device)
+
         roi_proposals = self.merge_layer(anchors, outputs.bbox_reg)
         roi_proposals = roi_proposals.squeeze()
 
@@ -268,12 +280,14 @@ class FasterRCNN(Module):
         im_w = x.size(3)
         x = self.features(x)
         rpn_out = self.rpn_layer(x)
-        anchors = self.anchor_layer(x)
+        anchors = self.anchor_layer(x.size(2), x.size(3))
+        anchors = anchors.to(x.device)
 
         roi_proposals = self.merge_layer(anchors, rpn_out.bbox_reg)
         roi_proposals = roi_proposals.squeeze()
 
-        filtered_proposals = U.drop_cross_boundary_boxes(roi_proposals, im_w, im_h)
+        not_cross_idx = U.drop_cross_boundary_boxes(roi_proposals, im_w, im_h).to(x.device)
+        filtered_proposals = roi_proposals[not_cross_idx]
         n_proposals = filtered_proposals.size(0)
         indices = torch.full((n_proposals,), 0, device=x.device)
         rois = torch.cat([
@@ -327,6 +341,9 @@ class RPNLoss_v2(Module):
         self.cls_loss = CrossEntropyLoss()
         self.bbox_loss = SmoothL1Loss()
 
+    '''
+    Fixed incorrect indexing
+    '''
     def forward(self, outputs, y):
         gt_bboxes = y['bboxes']
         im_w = y['width']
@@ -336,35 +353,37 @@ class RPNLoss_v2(Module):
         anchors = outputs.anchors
         roi_proposals = outputs.roi_proposals
 
-        anchors = U.drop_cross_boundary_boxes(anchors, im_w, im_h)
-        sampled_anchors, sampled_indices, sampled_labels, sampled_gt_idx = U.sample_anchors(
+        # subset
+        not_cross_idx = U.drop_cross_boundary_boxes(anchors, im_w, im_h).to(anchors.device)
+        anchors = anchors[not_cross_idx]
+        cls_logits = cls_logits[:, not_cross_idx]
+        roi_proposals = roi_proposals[not_cross_idx]
+
+        # subset of subset
+        sampled_idx, gt_idx, objectness = U.sample_anchors(
             anchors, gt_bboxes, .3, .7, 256
         )
 
+        cls_logits = cls_logits[:, sampled_idx]
 
-        # objectness labels for sampled
-        gt_labels = sampled_labels
-        pred_labels = cls_logits.squeeze()[sampled_indices]
-        cls_loss = self.cls_loss(pred_labels, gt_labels)
-
-        # roi for sampled
-        pred_box = roi_proposals[sampled_indices]
-        gt_box = gt_bboxes[sampled_gt_idx]
-
-        # parameterized as per paper
-        pred_box = U.parameterize_bbox(pred_box, sampled_anchors)
-        gt_box = U.parameterize_bbox(gt_box, sampled_anchors)
-
-        # only if label == 1
-        pred_box = pred_box[gt_labels == 1]
-        gt_box = gt_box[gt_labels == 1]
-
-        if gt_labels.sum() == 0:
-            bbox_loss = torch.tensor(0.0, dtype=cls_loss.dtype, device=cls_loss.device)
+        # cls loss
+        cls_loss = self.cls_loss(cls_logits[0], objectness)
+        # bbox loss
+        if objectness.sum() > 0:
+            pos_idx = sampled_idx[objectness > 0]
+            pos_gt_idx = gt_idx[objectness > 0]
+            pos_proposals = roi_proposals[pos_idx]
+            pos_anchors = anchors[pos_idx]
+            pos_gt_box = gt_bboxes[pos_gt_idx]
+            # parameterized as per paper
+            t_pred = U.parameterize_bbox(pos_proposals, pos_anchors)
+            t_gt = U.parameterize_bbox(pos_gt_box, pos_anchors)
+            bbox_loss = self.bbox_loss(t_pred, t_gt)
         else:
-            bbox_loss = self.bbox_loss(pred_box, gt_box)
+            bbox_loss = 0.0
 
         loss = cls_loss + self.lam * bbox_loss
+
         return loss
 
 

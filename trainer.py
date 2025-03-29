@@ -25,7 +25,7 @@ class Trainer:
     def __init__(self, 
         model=None, optimizer=None, scheduler=None, criterion=None, steps=None,
         dataset=None, dataloader_seed=None, dataloader_batchsize=1, dataloader_droplast=True, dataloader_samples=1,
-        collate_fn=None,
+        collate_fn=None, accumulation_steps=1,
     ):
         # constants
         self.dataset = dataset
@@ -39,6 +39,8 @@ class Trainer:
         self.drop_last = dataloader_droplast
         self.total_samples = dataloader_samples
         self.collate_fn = collate_fn
+
+        self.accumulation_steps = accumulation_steps
 
         self.training_steps = steps
 
@@ -63,9 +65,14 @@ class Trainer:
         if not (('x' in batch) and ('y' in batch)):
             raise Exception("batch must be a dict with 'x' and 'y' as keys")
 
+        if x.isnan().any():
+            print("NaN found in inputs")
+
         batch_pred = self.model(x)
 
         loss = self.criterion(batch_pred, y)
+        loss = loss / self.accumulation_steps
+
         return loss
 
     def zero_grad(self, step):
@@ -128,16 +135,17 @@ class Trainer:
         ))
 
         self.before_train()
+        self.zero_grad(None)
         for step in range(self.completed_steps, self.training_steps):
             self.current_step = step
             self.before_step(step)
 
-            self.zero_grad(step)
             loss = self.train_one_step(step)
             self.losses.append(loss)
             self.backpropagate(loss)
             self.optimizer_step(step)
             self.scheduler_step(step)
+            self.zero_grad(step)
 
             self.completed_steps = step + 1
             self.after_step(step, loss)
@@ -179,6 +187,20 @@ class Trainer:
         # should be changed if multi loss, etc
         loss.backward()
 
+        # Check for exploding gradients *before* zeroing them out
+        for i, param in enumerate(self.model.parameters()):
+            if param.grad is not None:
+                #grad_norm = param.grad.norm()
+                #print(f"Gradient norm for {i}: {grad_norm}")
+                # Check for NaNs or Infs in gradients
+                if torch.isnan(param.grad).any():
+                    print(f"NaN detected in gradients of {i}")
+                if torch.isinf(param.grad).any():
+                    print(f"Inf detected in gradients of {i}")
+
+        # Optional: Apply gradient clipping to prevent explosion
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=5.0)
+
     def before_train(self):
         pass
 
@@ -189,7 +211,10 @@ class Trainer:
         pass
 
     def before_step(self, step):
-      pass
+        accumulate = (step + 1) % self.accumulation_steps == 0
+        self.should_zero_grad = accumulate
+        self.should_step_optimizer = accumulate
+        self.should_step_scheduler = True
 
 '''
 class ExampleTrainerImpl(Trainer):
