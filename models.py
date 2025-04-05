@@ -38,18 +38,20 @@ def freeze_module(module, freeze):
         freeze_module(child, freeze)
 
 def roi_pool(x, rois, W=7, H=7, scale=1/16):
-    n,c,h,w = x.shape
+    n = len(x)
+    c = x[0].size(0)
     roi_count = rois.shape[0]
     indices = rois[:, 0].int()
 
     # scale bboxes to appropriate size at the feature map
-    bboxes = (rois[:, 1:5] * scale).round().int()
+    bboxes = rois[:, 1:5] * scale
     pooled = torch.zeros((roi_count, c, H, W), dtype=x.dtype, device=x.device)
     for i in range(roi_count):
         # extract RoI from image
         batch_idx = indices[i]
+        img = x[batch_idx]
         y1, x1, y2, x2 = bboxes[i].tolist()
-        roi_ft = x[batch_idx:batch_idx+1, :, y1:y2+1, x1:x2+1]
+        roi_ft = img[:, y1:y2+1, x1:x2+1]
 
         # pad RoI
         ft_h = roi_ft.size(2)
@@ -152,7 +154,6 @@ class DetectionHead(Module):
         super().__init__()
         self.fc = backbone.classifier
         self.roi_pool = torchvision.ops.RoIPool((cfg.H, cfg.W), cfg.scale)
-        # self.roi_pool = RoIPoolingLayer(cfg.H, cfg.W, cfg.scale)
         self.cls = Linear(cfg.hidden, cfg.n_classes)
         self.bbox = Linear(cfg.hidden, 4*cfg.n_classes)
 
@@ -163,13 +164,20 @@ class DetectionHead(Module):
             init_weights.normal_(m.weight, mean=0, std=std)
             init_weights.constant_(m.bias, cfg.init_bias)
 
-    def forward(self, x, rois):
-        x = self.roi_pool(x, rois)
-        x = x.reshape(x.size(0), -1)
-        x = self.fc(x)
-        cls_logits = self.cls(x)
+    def forward(self, inputs):
+        x, rois = inputs
+        '''
+            x: (N, C, Hin, Win)
+            rois: (K,5)
+        '''
+        x = self.roi_pool(x, rois) # (K, C, Hout, Wout)
+        x = x.reshape(x.size(0), -1) # (K, C*Hout*Wout)
+        x = self.fc(x) # (K, ?)
+
+        cls_logits = self.cls(x) # (K,21)
         cls_softmax = F.softmax(cls_logits, dim=1)
-        bbox_reg = self.bbox(x)
+
+        bbox_reg = self.bbox(x) # (K,4)
         return TripleOutput(cls_logits, cls_softmax, bbox_reg)
 
 class RPNHead(Module):
@@ -184,33 +192,19 @@ class RPNHead(Module):
             init_weights.normal_(m.weight, mean=cfg.init_mean, std=cfg.init_std)
 
     def forward(self, x):
-        if x.isnan().any():
-            print("NaN found after rpn_input")
-
         B = x.size(0)
         x = self.conv(x)
-        if x.isnan().any():
-            print("NaN found after rpn_conv_1")
         x = self.relu(x)
-        if x.isnan().any():
-            print("NaN found after rpn_relu")
 
         cls_logits = self.cls(x)
-        if cls_logits.isnan().any():
-            print("NaN found after rpn_cls")
-
         cls_logits = cls_logits.permute(0,2,3,1).reshape(B, -1, 2)
         cls_logits = cls_logits - cls_logits.max(dim=2, keepdim=True)[0]# Prevent overflow
 
 
         #cls_logits = cls_logits.permute(0,2,3,1).contiguous().view(B, -1, 2)
         cls_softmax = F.softmax(cls_logits, dim=2)
-        if cls_softmax.isnan().any():
-            print("NaN found after rpn_softmax")
 
         bbox_reg = self.bbox(x)
-        if bbox_reg.isnan().any():
-            print("NaN found after rpn_bbox")
         bbox_reg = bbox_reg.permute(0,2,3,1).reshape(B, -1, 4)
         #bbox_reg = bbox_reg.permute(0,2,3,1).contiguous().view(B, -1, 4)
 
@@ -247,23 +241,22 @@ class FastRCNN(Module):
         self.detection_layer = DetectionHead(backbone, cfg)
         self.merge_layer = TransformBBox()
 
-    def forward(self, x, roi):
-        x = self.features(x)
-        outputs = self.detection_layer(x, rois)
-        bbox_reg = outputs.bbox_reg
+    def forward(self, inputs):
+        (x,rois) = inputs
         n = rois.size(0)
-
+        x = self.features(x)
+        outputs = self.detection_layer((x, rois))
+        bbox_reg = outputs.bbox_reg
         pred_cls = outputs.cls_softmax.argmax(dim=1)
 
         # treat (K+1) as batch size
         bbox_reg = bbox_reg.contiguous().view(n, -1, 4)
         bbox_reg = bbox_reg[torch.arange(n), pred_cls]
         roi_bbox = rois[:, 1:]
-
         locs = self.merge_layer(roi_bbox, bbox_reg.unsqueeze(0))
         locs = locs.squeeze()
 
-        return FastOutput(outputs.cls_logits, outputs.cls_softmax, bbox_reg, locs, pred_cls)
+        return FastOutput(outputs.cls_logits, outputs.cls_softmax, bbox_reg, locs, pred_cls, rois)
 
 class FasterRCNN(Module):
     def __init__(self, rpn_cfg, anchor_cfg, detection_cfg):
@@ -295,7 +288,7 @@ class FasterRCNN(Module):
             filtered_proposals,
         ], dim=1)
 
-        det_out = self.detection_layer(x, rois)
+        det_out = self.detection_layer((x, rois))
         bbox_reg = det_out.bbox_reg
         pred_cls = det_out.cls_softmax.argmax(dim=1)
         bbox_reg = bbox_reg.contiguous().view(n_proposals, -1, 4)
@@ -335,8 +328,12 @@ class RPNLoss(Module):
         return loss
 
 class RPNLoss_v2(Module):
-    def __init__(self, lam):
+    def __init__(self, lam, th_lo, th_hi, sample_size):
         super().__init__()
+        self.th_lo = th_lo
+        self.th_hi = th_hi
+        self.sample_size = sample_size
+
         self.lam = lam
         self.cls_loss = CrossEntropyLoss()
         self.bbox_loss = SmoothL1Loss()
@@ -393,13 +390,28 @@ class MultiTaskLoss(Module):
         self.lam = lam
         self.cls_loss = CrossEntropyLoss()
         self.bbox_loss = SmoothL1Loss()
-    
-    def forward(self, cls_pred, cls_target, bbox_pred, bbox_target):
-        cls_loss = self.cls_loss(cls_pred, cls_target)
-        if bbox_pred.size(0) == 0:
-            bbox_loss = torch.tensor(0.0, dtype=cls_loss.dtype, device=cls_loss.device)
+
+    def forward(self, outputs, y):
+        cls_logits = outputs.cls_logits
+        roi_proposals = outputs.roi_proposals[:,1:]
+        locs = outputs.locs
+
+        gt_box = y['gt_box'][:, 1:]
+        gt_cls = y['gt_cls'][:, 1:].ravel()
+
+        cls_loss = self.cls_loss(cls_logits, gt_cls)
+        pred_cls = outputs.cls_softmax.argmax(dim=1)
+        correct_cls = (pred_cls == gt_cls)
+
+        if correct_cls.any():
+            locs = locs[correct_cls]
+            gt_box = gt_box[correct_cls]
+            roi_proposals = roi_proposals[correct_cls]
+            t_pred = U.parameterize_bbox(locs, roi_proposals)
+            t_gt = U.parameterize_bbox(gt_box, roi_proposals)
+            bbox_loss = self.bbox_loss(t_pred, t_gt)
         else:
-            bbox_loss = self.bbox_loss(bbox_pred, bbox_target)
+            bbox_loss = 0.0
 
         loss = cls_loss + self.lam * bbox_loss
         return loss

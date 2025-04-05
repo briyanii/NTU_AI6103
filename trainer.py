@@ -65,9 +65,6 @@ class Trainer:
         if not (('x' in batch) and ('y' in batch)):
             raise Exception("batch must be a dict with 'x' and 'y' as keys")
 
-        if x.isnan().any():
-            print("NaN found in inputs")
-
         batch_pred = self.model(x)
 
         loss = self.criterion(batch_pred, y)
@@ -87,6 +84,27 @@ class Trainer:
         if self.should_step_scheduler:
             self.scheduler.step()
 
+    def get_dataloader(self):
+        number_of_batches = self.total_samples / self.batch_size
+        if self.drop_last:
+            number_of_batches = int(np.floor(number_of_batches))
+        else:
+            number_of_batches = int(np.ceil(number_of_batches))
+
+        if self.training_steps > number_of_batches:
+            raise ValueError("Insufficient number of batches for training")
+
+        dataloader, dataloader_seed = get_dataloader(
+            self.dataset,
+            self.total_samples,
+            collate_fn=self.collate_fn,
+            skip=self.completed_steps,
+            seed=self.dataloader_seed,
+            batch_size=self.batch_size,
+            drop_last=self.drop_last,
+        )
+        return dataloader, number_of_batches, dataloader_seed
+
     def train(self):
         if self.completed_steps >= self.training_steps:
             raise Exception("Number of completed steps >= Number of training steps")
@@ -97,27 +115,9 @@ class Trainer:
         floor if drop last, ceil if not drop last
         number of steps should be <= number of batches
         '''
-
-        number_of_batches = self.total_samples / self.batch_size
-        if self.drop_last:
-            number_of_batches = int(np.floor(number_of_batches))
-        else:
-            number_of_batches = int(np.ceil(number_of_batches))
-
-        if self.training_steps > number_of_batches:
-            raise ValueError("Insufficient number of batches for training")
-
-        self.dataloader, dataloader_seed = get_dataloader(
-            self.dataset,
-            self.total_samples,
-            collate_fn=self.collate_fn,
-            skip=self.completed_steps,
-            seed=self.dataloader_seed,
-            batch_size=self.batch_size,
-            drop_last=self.drop_last,
-        )
-        self.dataloader_seed = dataloader_seed
         self.starting_step = self.completed_steps
+        dataloader, number_of_batches, seed = self.get_dataloader()
+        self.dataloader = dataloader
 
         str_template = (
             '--- Training ---\n'
@@ -188,7 +188,7 @@ class Trainer:
         loss.backward()
 
         # Check for exploding gradients *before* zeroing them out
-        for i, param in enumerate(self.model.parameters()):
+        for i, param in self.model.named_parameters():
             if param.grad is not None:
                 #grad_norm = param.grad.norm()
                 #print(f"Gradient norm for {i}: {grad_norm}")

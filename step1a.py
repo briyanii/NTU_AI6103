@@ -3,7 +3,11 @@ from datetime import datetime
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn import MaxPool2d
-from datatypes import Rpn_cfg, Anchor_cfg
+from config import (
+    get_rpn_cfg,
+    get_anchor_cfg,
+    checkpoint_filename_template_1 as checkpoint_filename_template
+)
 from models import RPN, RPNLoss_v2
 from dataset import VOCDataset
 import torch
@@ -11,18 +15,11 @@ import sys
 import glob
 import os
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-checkpoint_filename_template = './outputs/checkpoint_step1_{step}.pt'
-
 class TrainerStep1(Trainer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def after_step(self, step, loss):
         if loss.isnan():
             path = checkpoint_filename_template.format(step=step)
-            self.save_state(path)
+            self.save_state(path + '.nan')
             print("step {} Loss is NaN. Check for issues?".format(step))
             sys.exit(1)
 
@@ -42,25 +39,6 @@ class TrainerStep1(Trainer):
         self.save_state(path)
         print("Saved", path)
 
-
-stride_len = 16
-scales = [128,256,512]
-areas = list(map(lambda x: x**2, scales))
-ratios = [(1,1), (1,2), (2,1)]
-k = len(areas) * len(ratios)
-cfg_1 = Rpn_cfg(3, 512, k, 0.0, 0.01)
-cfg_2 = Anchor_cfg(areas, ratios, stride_len, .3, .7, 256)
-
-lr_0 = 0.001
-lr_1 = 0.0001
-
-def lr_lambda(step):
-    if step < 60000:
-        return lr_0
-    else:
-        return lr_1
-
-
 def load_latest_checkpoint(trainer):
     glob_path = checkpoint_filename_template.format(step="*")
     latest_checkpoint_path = None
@@ -79,27 +57,44 @@ def load_latest_checkpoint(trainer):
     path = checkpoint_filename_template.format(step=highest_step)
     trainer.load_state(path)
 
-
-def collate_fn(batch):
-    item = batch[0]
-    img = item['image'].unsqueeze(0).to(device)
-    gt_bboxes = item['bboxes'].to(device)
-
-    return {
-        'x': img,
-        'y': {
-            # for loss
-            'bboxes': gt_bboxes,
-            # for dropping cross boundary anchors
-            'width': item['width'],
-            'height': item['height'],
-        }
-    }
-
-total_steps = 60000+20000
+lr_0 = 0.001
+lr_1 = 0.0001
+steps1 = 60000
+steps2 = 20000
+total_steps = steps1+steps2
+loss_lambda = 10
+sample_lo_th = .3
+sample_hi_th = .7
+sample_size = 256
+sgd_wd = 5e-4
+sgd_momentum = 0.9
+dataloader_seed=54321
+_dataset = (2007, 'trainval')
 
 if __name__ == '__main__':
-    model = RPN(cfg_1, cfg_2)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    def lr_lambda(step):
+        if step < steps1:
+            return lr_0
+        else:
+            return lr_1
+
+    def collate_fn(batch):
+        item = batch[0]
+        img = item['image'].unsqueeze(0).to(device)
+        gt_bboxes = item['bboxes'].to(device)
+
+        return {
+            'x': img,
+            'y': {
+                'bboxes': gt_bboxes,
+                'width': item['width'],
+                'height': item['height'],
+            }
+        }
+
+    model = RPN(get_rpn_cfg(), get_anchor_cfg())
     model = model.to(device)
 
     # freeze up to conv3_1
@@ -111,10 +106,10 @@ if __name__ == '__main__':
                 break
         m.requires_grad = False
 
-    optimizer = SGD(model.parameters(), lr=lr_0, weight_decay=0.0005, momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=lr_0, weight_decay=sgd_wd, momentum=sgd_momentum)
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
-    criterion = RPNLoss_v2(10)
-    dataset = VOCDataset('trainval')
+    criterion = RPNLoss_v2(sample_lambda, sample_lo_th, sample_hi_th, sample_size)
+    dataset = VOCDataset(*_dataset)
 
     trainer = TrainerStep1(
         model=model,

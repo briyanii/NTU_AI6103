@@ -70,38 +70,57 @@ def compute_iou(boxes1, boxes2):
     iou = intersection / union.clamp(min=1e-6)  # Avoid division by zero
     return iou
 
-def sample_rois(proposals, gt_bbox, pos_th, neg_th_lo, neg_th_hi, sample_size, pos_ratio):
 
-    pos_sample_size = int(sample_size * pos_ratio)
+def rand_sample(arr, tgt_sz):
+    n = arr.size(0)
+    idx = torch.randperm(n)[:tgt_sz]
+    return idx, arr[idx]
 
-    ious = compute_iou(proposals, gt_bbox)
-    case_1 = (ious >= pos_th)
-    case_2 = (ious >= neg_th_lo) & (ious < neg_th_hi)
-    case_2 = case_2.all(dim=1)
-    case_1 = case_1.any(dim=1)
+def sample_rois(rois, gt_cls, gt_box, pos_th, neg_lo, neg_hi, sample_size, pos_ratio):
+    '''
+        prereq: rois and gt on same device
+        find pos and neg rois based on iou
+        for pos rois
+            sample up to PR% of the sample_size
+        for neg rois
+            sample up to remaining quota
+    '''
+    # prereq: both rois and gt on same device
+    n = rois.size(0)
+    ious = compute_iou(rois, gt_box)
 
-    labels = torch.where(case_1, 1, 0)
+    # assign pos / neg labels
+    max_iou_per_roi, gt_index_per_roi = ious.max(dim=1)
+    roi_index_per_gt = ious.argmax(dim=0)
 
-    pos_size = case_1.sum()
-    neg_size = case_2.sum()
+    is_pos = max_iou_per_roi >= pos_th
+    is_neg = (max_iou_per_roi >= neg_lo) & (max_iou_per_roi < neg_hi)
+    n_pos = is_pos.sum().item()
+    n_neg = is_neg.sum().item()
 
-    pos_idx = torch.randperm(pos_size)[:pos_sample_size]
-    pos_idx = torch.where(case_1)[0][pos_idx]
-    pos_sample_size = pos_idx.size(0)
+    pos_sample_size = min(n_pos, int(sample_size*pos_ratio))
+    neg_sample_size = min(n_neg, sample_size - pos_sample_size)
 
-    neg_idx = torch.randperm(neg_size)[:sample_size - pos_sample_size]
-    neg_idx = torch.where(case_2)[0][neg_idx]
-    neg_sample_size = neg_idx.size(0)
+    indices = torch.arange(0, n)
+    pos_idx = rand_sample(indices[is_pos], pos_sample_size)[1]
+    neg_idx = rand_sample(indices[is_neg], neg_sample_size)[1]
+    sample_idx = torch.cat([pos_idx, neg_idx])
 
-    pos_samples = proposals[pos_idx]
-    neg_samples = proposals[neg_idx]
-    samples = torch.cat([pos_samples, neg_samples], dim=0)
-    sample_indices = torch.cat([neg_idx, pos_idx], dim=0)
-    sample_gt_idx = ious[sample_indices].argmax(dim=1)
-    sample_labels = labels[sample_indices]
-    sample_gt_idx = torch.where(sample_labels==1, sample_gt_idx, -1)
+    gt_cls = gt_cls[gt_index_per_roi]
+    gt_cls[neg_idx] = 0
+    gt_cls = gt_cls[sample_idx]
 
-    return samples, sample_indices, sample_labels, sample_gt_idx
+    gt_box = gt_box[gt_index_per_roi]
+    gt_box = gt_box[sample_idx]
+
+    rois = rois[sample_idx]
+
+    return rois, gt_cls, gt_box
+
+def cat_val(arr, val):
+    n = arr.size(0)
+    vals = torch.full((n,1), val)
+    return torch.cat([vals, arr], dim=1)
 
 def sample_anchors(anchors, gt, lo_th, hi_th, sample_size):
     # prereq: both anchors and gt on same device
@@ -122,12 +141,11 @@ def sample_anchors(anchors, gt, lo_th, hi_th, sample_size):
     pos_sample_size = min(n_pos.item(), sample_size//2)
     neg_sample_size = sample_size - pos_sample_size
 
-    pos_idx = torch.where(is_pos)[0]
-    neg_idx = torch.where(is_neg)[0]
-    pos_idx = pos_idx[torch.randperm(n_pos)[:pos_sample_size]]
-    neg_idx = neg_idx[torch.randperm(n_neg)[:neg_sample_size]]
-
+    indices = torch.arange(0, anchors.size(0))
+    pos_idx = rand_sample(indices[is_pos], pos_sample_size)
+    neg_idx = rand_sample(indices[is_neg], neg_sample_size)
     sample_idx = torch.cat([pos_idx, neg_idx])
+
     gt_idx = gt_index_per_anchor[sample_idx]
     objectness = torch.zeros_like(sample_idx)
     objectness[:n_pos] = 1
@@ -137,7 +155,6 @@ def sample_anchors(anchors, gt, lo_th, hi_th, sample_size):
 def get_anchor_dims(areas, ratios):
     '''
     w,h for anchors
-    
     ratio = h_r, w_r
     A = area
     w x h = A
