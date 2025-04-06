@@ -4,6 +4,8 @@ from config import (
     roi_proposal_path,
     checkpoint_filename_template_1 as checkpoint_filename_template,
 )
+import utils as U
+from torchvision.ops import nms
 from models import RPN
 from dataset import VOCDataset
 import torch
@@ -38,22 +40,38 @@ if __name__ == '__main__':
         model = RPN(get_rpn_cfg(), get_anchor_cfg())
         model = model.to(device)
 
-        dataset = VOCDataset('trainval')
+        dataset = VOCDataset(2007, 'trainval')
         state_dict = load_latest_checkpoint()
         model.load_state_dict(state_dict)
 
         proposals = []
         for i, item in enumerate(dataset):
-            img = item['image'].unsqueeze(0)
+            img = item['image'].unsqueeze(0).to(device)
             i = item['index']
+            w = item['width']
+            h = item['height']
             outputs = model(img)
+            anchors = outputs.anchors
             roi = outputs.roi_proposals
-            indices = torch.full((roi.size(0), 1), i)
-            roi = torch.hstack([indices, roi])
+            cls_softmax = outputs.cls_softmax
+            score = cls_softmax[0,:,0] # 0 = fg, 1 = bg
+
+            # drop cross boundary objects for training process
+            kept = U.drop_cross_boundary_boxes(anchors, w, h).to(roi.device)
+            n_kept = kept.size(0) # ~60k
+            roi = roi[kept]
+            score = score[kept]
+
+            # nms
+            kept = nms(roi, score, .7)
+            n_kept = kept.size(0) # ~2k
+            score = score[kept]
+            roi = roi[kept]
+
+            indices = torch.full((n_kept, 1), i)
+            roi = torch.hstack([indices, roi.cpu()])
             proposals.append(roi)
 
         with open(roi_proposal_path, 'wb') as fp:
             pickle.dump(proposals, fp)
 
-        print(roi_proposal_path)
-        print(len(proposals))
