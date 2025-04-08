@@ -2,13 +2,11 @@ from trainer import Trainer
 from datetime import datetime
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
-from torch.nn import MaxPool2d
 from config import (
-    get_rpn_cfg,
-    get_anchor_cfg,
     checkpoint_filename_template_1 as checkpoint_filename_template
 )
-from models import RPN, RPNLoss_v2
+from config import config
+from models import RPN, RPN_Loss
 from dataset import VOCDataset
 import torch
 import sys
@@ -57,71 +55,42 @@ def load_latest_checkpoint(trainer):
     path = checkpoint_filename_template.format(step=highest_step)
     trainer.load_state(path)
 
-lr_0 = 0.001
-lr_1 = 0.0001
-steps1 = 60000
-steps2 = 20000
-total_steps = steps1+steps2
-loss_lambda = 10
-sample_lo_th = .3
-sample_hi_th = .7
-sample_size = 256
-sgd_wd = 5e-4
-sgd_momentum = 0.9
 dataloader_seed=54321
 _dataset = (2007, 'trainval')
 
 if __name__ == '__main__':
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
     def lr_lambda(step):
-        if step < steps1:
-            return lr_0
+        if step < config['rpn_step0']:
+            return config['rpn_lr_0']
         else:
-            return lr_1
+            return config['rpn_lr_1']
 
-    def collate_fn(batch):
-        item = batch[0]
-        img = item['image'].unsqueeze(0).to(device)
-        gt_bboxes = item['bboxes'].to(device)
+    model = RPN()
 
-        return {
-            'x': img,
-            'y': {
-                'bboxes': gt_bboxes,
-                'width': item['width'],
-                'height': item['height'],
-            }
-        }
+    # freeze up to conv3_1 (freeze conv1 and conv2)
+    for n,m in model.features.named_parameters():
+        n = n.split('.')[0]
+        if n in ['0', '2', '5', '7']:
+            m.requires_grad = False
 
-    model = RPN(get_rpn_cfg(), get_anchor_cfg())
-    model = model.to(device)
-
-    # freeze up to conv3_1
-    conv_block_id = 1
-    for m in model.features.parameters():
-        if isinstance(m, MaxPool2d):
-            conv_block_id += 1
-            if conv_block_id == 3:
-                break
-        m.requires_grad = False
-
-    optimizer = SGD(model.parameters(), lr=lr_0, weight_decay=sgd_wd, momentum=sgd_momentum)
+    optimizer = SGD(model.parameters(), lr=config['rpn_lr_0'], weight_decay=config['sgd_decay'], momentum=config['sgd_momentum'])
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
-    criterion = RPNLoss_v2(sample_lambda, sample_lo_th, sample_hi_th, sample_size)
+    criterion = RPN_Loss()
     dataset = VOCDataset(*_dataset)
 
     trainer = TrainerStep1(
+        dataset=dataset,
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
         criterion=criterion,
-        steps=total_steps,
-        dataset=dataset,
-        dataloader_batchsize=1,
-        dataloader_samples=total_steps,
+        steps=config['fast_step0'] + config['fast_step1'],
+        batch_size=1,
+        normalize=True,
+        augment=True,
+        shuffle=True,
+        drop_last=False,
         dataloader_seed=54321,
-        collate_fn=collate_fn,
         accumulation_steps=1,
     )
 

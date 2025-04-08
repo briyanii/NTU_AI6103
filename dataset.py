@@ -1,6 +1,7 @@
 from torchvision.datasets import VOCDetection
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
+import itertools
 import torchvision
 import torch
 import os
@@ -69,7 +70,7 @@ class VOCDataset(Dataset):
             labels = list(map(self.image_id_to_labels, image_ids))
             return labels
 
-    def __init__(self, year, image_set, load=True, transform=True, root='./data', roi_proposals=None):
+    def __init__(self, year, image_set, load=True, normalize=True, scale=True, augment=False, flip_p=.5, seed=42, root='./data'):
         super().__init__()
         self.object_categories = ['aeroplane', 'bicycle', 'bird', 'boat',
                             'bottle', 'bus', 'car', 'cat', 'chair',
@@ -82,10 +83,14 @@ class VOCDataset(Dataset):
         self.set_path = os.path.join(self.base_path, 'ImageSets', '{purpose}', '{image_set}.txt')
         self.image_path = os.path.join(self.base_path, 'JPEGImages', '{filename}')
         self.bbox_elements = ['xmin', 'ymin', 'xmax', 'ymax']
-        self.roi_proposals = roi_proposals
         self.metadata = self.get_metadata(image_set=image_set, year=year, root=root)
         self.do_load = load
-        self.do_transform = transform
+        self.do_augment = augment
+        self.do_normalize = normalize
+        self.do_scale = scale
+        self.flip_p = flip_p
+        self.rng = torch.Generator()
+        self.rng.manual_seed(seed)
 
     def __len__(self):
         return len(self.metadata)
@@ -95,9 +100,10 @@ class VOCDataset(Dataset):
 
         metadata = self.metadata[index]
         filepath = metadata['filepath']
+        for k in ['bboxes', 'width', 'height', 'filename', 'filepath', 'class_ids']:
+            item[k] = metadata[k]
         item['index'] = index
-        item['filepath'] = filepath
-        item['filename'] = metadata['filename']
+        return item
 
         width = metadata['width']
         height = metadata['height']
@@ -105,44 +111,59 @@ class VOCDataset(Dataset):
 
         # scaler short side up to 600
         # then make sure long side <= 1000
-        scaling_factor = 600 / min_side
-        width = int(round(scaling_factor * width))
-        height = int(round(scaling_factor * height))
-        max_side = max(width, height)
-
-        if max_side > 1000:
-            scaling_factor = 1000 / max_side
+        if self.do_scale:
+            scaling_factor = 600 / min_side
             width = int(round(scaling_factor * width))
             height = int(round(scaling_factor * height))
-        scaling_factor = height / metadata['height']
+            max_side = max(width, height)
 
+            if max_side > 1000:
+                scaling_factor = 1000 / max_side
+                width = int(round(scaling_factor * width))
+                height = int(round(scaling_factor * height))
+            scaling_factor = height / metadata['height']
+        else:
+            scaling_factor = 1
+
+        flipped = False
+        if self.do_augment:
+            p = torch.rand(1, generator=self.rng)[0]
+            if p > self.p_flip:
+                flipped = True
+
+        item['flipped'] = flipped
         item['width'] = width
         item['height'] = height
 
         bboxes = torch.Tensor(metadata['bboxes']) * scaling_factor
-        bboxes = bboxes.round().to(torch.float32)
+        bboxes = bboxes.to(torch.float32)
+        if flipped:
+            bboxes[:, [0,2]] = width - bboxes[:, [0,2]]
         item['bboxes'] = bboxes
 
         class_ids = metadata['class_ids']
         class_ids = torch.Tensor(class_ids).to(torch.int64)
         item['class_ids'] = class_ids
 
-        if self.roi_proposals is not None:
-            filename = item['filename']
-            item['roi_proposals'] = self.roi_proposals.get(filename, None)
-
         if self.do_load:
             img = torchvision.io.read_image(filepath)
-            item['image'] = img
+            transforms = []
 
-            if self.do_transform:
-                transforms = v2.Compose([
-                    v2.Resize((height, width), antialias=True),
-                    v2.ToDtype(torch.float32, scale=True),
-                    v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                ])
-                img = transforms(img)
-                item['image'] = img
+            if self.do_scale:
+                transforms.append(v2.Resize((height, width), antialias=True))
+            transforms.append(v2.ToDtype(torch.float32, scale=True))
+            if self.do_normalize:
+                transforms.append(v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+
+
+
+            if flipped:
+                transforms.append(v2.RandomHorizontalFlip(p=1))
+
+            transform = v2.Compose(transforms)
+            img = transform(img)
+
+            item['image'] = img
 
         return item
 

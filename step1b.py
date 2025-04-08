@@ -1,9 +1,8 @@
 from config import (
-    get_rpn_cfg,
-    get_anchor_cfg,
     roi_proposal_path,
     checkpoint_filename_template_1 as checkpoint_filename_template,
 )
+from dataloader import get_dataloader
 import utils as U
 from torchvision.ops import nms
 from models import RPN
@@ -12,8 +11,6 @@ import torch
 import glob
 import pickle
 import os
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 def load_latest_checkpoint():
     glob_path = checkpoint_filename_template.format(step="*")
@@ -31,33 +28,44 @@ def load_latest_checkpoint():
         return
 
     path = checkpoint_filename_template.format(step=highest_step)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path)
     return state['model']
 
 
 if __name__ == '__main__':
     with torch.no_grad():
-        model = RPN(get_rpn_cfg(), get_anchor_cfg())
-        model = model.to(device)
+        model = RPN()
 
         dataset = VOCDataset(2007, 'trainval')
+        dataloader, _= get_dataloader(dataset,
+            num_samples=len(dataset),
+            seed=None,
+            batch_size=1,
+            drop_last=True,
+            skip=0,
+            augment=False,
+            normalize=True,
+            shuffle=False
+        )
+
         state_dict = load_latest_checkpoint()
         model.load_state_dict(state_dict)
 
         proposals = []
-        for i, item in enumerate(dataset):
-            img = item['image'].unsqueeze(0).to(device)
-            i = item['index']
-            w = item['width']
-            h = item['height']
+        for i in range(len(dataset)):
+            b = next(dataloader)
+            img, _ = b['x']
+            w = b['y']['width'][0]
+            h = b['y']['height'][0]
+
             outputs = model(img)
             anchors = outputs.anchors
             roi = outputs.roi_proposals
             cls_softmax = outputs.cls_softmax
-            score = cls_softmax[0,:,0] # 0 = fg, 1 = bg
+            score = cls_softmax[0, :, 1] # 1 = fg, 0 = bg
 
-            # drop cross boundary objects for training process
-            kept = U.drop_cross_boundary_boxes(anchors, w, h).to(roi.device)
+            # drop cross boundary anchors for training process
+            kept = U.drop_cross_boundary_boxes(anchors, w, h)
             n_kept = kept.size(0) # ~60k
             roi = roi[kept]
             score = score[kept]
@@ -70,6 +78,7 @@ if __name__ == '__main__':
 
             indices = torch.full((n_kept, 1), i)
             roi = torch.hstack([indices, roi.cpu()])
+            print('step {:15s}'.format(str(i+1)), roi.shape)
             proposals.append(roi)
 
         with open(roi_proposal_path, 'wb') as fp:

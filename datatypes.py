@@ -46,7 +46,4 @@ Anchor_cfg = namedtuple('AnchorConfig', [
     'areas',
     'ratios',
     'stride_len',
-    'lo_th',
-    'hi_th',
-    'n'
 ])

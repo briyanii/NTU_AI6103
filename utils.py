@@ -74,6 +74,7 @@ def compute_iou(boxes1, boxes2):
 def rand_sample(arr, tgt_sz):
     n = arr.size(0)
     idx = torch.randperm(n)[:tgt_sz]
+    idx = idx.to(arr.device)
     return idx, arr[idx]
 
 def sample_rois(rois, gt_cls, gt_box, pos_th, neg_lo, neg_hi, sample_size, pos_ratio):
@@ -84,6 +85,9 @@ def sample_rois(rois, gt_cls, gt_box, pos_th, neg_lo, neg_hi, sample_size, pos_r
             sample up to PR% of the sample_size
         for neg rois
             sample up to remaining quota
+
+        rois (N,4)
+        box (M,4)
     '''
     # prereq: both rois and gt on same device
     n = rois.size(0)
@@ -101,7 +105,7 @@ def sample_rois(rois, gt_cls, gt_box, pos_th, neg_lo, neg_hi, sample_size, pos_r
     pos_sample_size = min(n_pos, int(sample_size*pos_ratio))
     neg_sample_size = min(n_neg, sample_size - pos_sample_size)
 
-    indices = torch.arange(0, n)
+    indices = torch.arange(n)
     pos_idx = rand_sample(indices[is_pos], pos_sample_size)[1]
     neg_idx = rand_sample(indices[is_neg], neg_sample_size)[1]
     sample_idx = torch.cat([pos_idx, neg_idx])
@@ -122,6 +126,17 @@ def cat_val(arr, val):
     vals = torch.full((n,1), val)
     return torch.cat([vals, arr], dim=1)
 
+def label_rois(rois, gt_box, gt_cls, neg_lo=0.0, neg_hi=0.5, pos_lo=0.5, pos_hi=torch.inf):
+    ious = compute_iou(rois, gt_box)
+    max_iou_per_roi, gt_idx_per_roi = ious.max(dim=1)
+    # max_iou_per_gt, roi_idx_per_gt = ious.max(dim=0)
+
+    pos_mask = (max_iou_per_roi >= pos_lo) & (max_iou_per_roi < pos_hi)
+    neg_mask = (max_iou_per_roi >= neg_lo) & (max_iou_per_roi < neg_hi)
+    label = gt_cls[gt_idx_per_roi]
+    box = gt_box[gt_idx_per_roi]
+    return box, label, pos_mask, neg_mask, ious
+
 def sample_anchors(anchors, gt, lo_th, hi_th, sample_size):
     # prereq: both anchors and gt on same device
     ious = compute_iou(anchors, gt)
@@ -141,9 +156,9 @@ def sample_anchors(anchors, gt, lo_th, hi_th, sample_size):
     pos_sample_size = min(n_pos.item(), sample_size//2)
     neg_sample_size = sample_size - pos_sample_size
 
-    indices = torch.arange(0, anchors.size(0))
-    pos_idx = rand_sample(indices[is_pos], pos_sample_size)
-    neg_idx = rand_sample(indices[is_neg], neg_sample_size)
+    indices = torch.arange(anchors.size(0)).to(is_pos.device)
+    pos_idx = rand_sample(indices[is_pos], pos_sample_size)[1]
+    neg_idx = rand_sample(indices[is_neg], neg_sample_size)[1]
     sample_idx = torch.cat([pos_idx, neg_idx])
 
     gt_idx = gt_index_per_anchor[sample_idx]
@@ -184,12 +199,14 @@ def get_anchor_origins(ft_w, ft_h, stride_len):
     '''
     origin (cx,cy) for anchors
     '''
+    # top left corners
     origin_x = torch.arange(0, ft_w*stride_len, stride_len)
     origin_y = torch.arange(0, ft_h*stride_len, stride_len)
     origin_x, origin_y = torch.meshgrid(origin_x, origin_y, indexing='ij')
     origin_x = origin_x.ravel()
     origin_y = origin_y.ravel()
 
+    # shift to center
     anchor_origins = torch.vstack([origin_x, origin_y]) + stride_len / 2
     return anchor_origins.T
 
@@ -213,26 +230,19 @@ def merge_anchor_origin_and_dim(anchor_origins, anchor_dims):
     return anchors
 
 def xyxy_2_xywh(xyxy):
-    x1 = xyxy[:, 0]
-    y1 = xyxy[:, 1]
-    x2 = xyxy[:, 2]
-    y2 = xyxy[:, 3]
+    x1,y1,x2,y2 = xyxy.unbind(dim=1)
     w = x2 - x1
     h = y2 - y1
-    
+
     xywh = torch.stack([x1,y1,w,h], dim=1)
     return xywh
 
 
 def xywh_2_xyxy(xywh):
-    x1 = xywh[:, 0]
-    y1 = xywh[:, 1]
-    w = xywh[:, 2]
-    h = xywh[:, 3]
-    
+    x1,y1,w,h = xywh.unbind(dim=1)
     x2 = x1 + w
     y2 = y1 + h
-    
+
     xyxy = torch.stack([x1,y1,x2,y2], dim=1)
     return xyxy
 
@@ -240,14 +250,12 @@ def parameterize_bbox(bbox, anchor):
     if bbox.size(0) == 0:
         return torch.empty((0, 4))
 
-    anchor = xyxy_2_xywh(anchor)
-    bbox = xyxy_2_xywh(bbox)
-    anchor_w = anchor[:, 2]
-    anchor_h = anchor[:, 3]
-    tx = (bbox[:, 0] - anchor[:, 0]) / anchor_w
-    ty = (bbox[:, 1] - anchor[:, 1]) / anchor_h
-    tw = torch.log1p(bbox[:, 2] / anchor_w - 1)
-    th = torch.log1p(bbox[:, 3] / anchor_h - 1)
+    ax,ay,aw,ah = xyxy_2_xywh(anchor).unbind(dim=1)
+    bx,by,bw,bh = xyxy_2_xywh(bbox).unbind(dim=1)
+    tx = (bx - ax) / aw
+    ty = (by - ay) / ah
+    tw = torch.log(bw / aw)
+    th = torch.log(bh / ah)
 
     txywh = torch.stack([tx,ty,tw,th], dim=1)
     return txywh
@@ -267,11 +275,9 @@ def drop_cross_boundary_boxes(bboxes, im_w, im_h):
     drop cross-boundary bounding boxes
     '''
     bboxes = bboxes.cpu()
-
-    lower_bnd = torch.zeros((4,))
-    upper_bnd = torch.Tensor([im_w, im_h, im_w, im_h])
-    condition = (bboxes >= lower_bnd) & (bboxes <= upper_bnd)
-
-    idx = torch.where(condition)[0]
+    x1, y1, x2, y2 = bboxes.unbind(dim=1)
+    idx = torch.arange(bboxes.size(0))
+    condition = (x1 >= 0) & (x1 <= im_w) & (x2 >= 0) & (x2 <= im_w) & (y1 >= 0) & (y1 <= im_h) & (y2 >= 0) & (y2 <= im_h)
+    idx = idx[condition]
 
     return idx
