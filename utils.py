@@ -263,8 +263,8 @@ def parameterize_bbox(bbox, anchor):
 
 def clip_bboxes(bboxes, im_w, im_h):
     bboxes[:, 0] = torch.clamp(bboxes[:, 0], 0, im_w)
-    bboxes[:, 1] = torch.clamp(bboxes[:, 1], 0, im_h)
     bboxes[:, 2] = torch.clamp(bboxes[:, 2], 0, im_w)
+    bboxes[:, 1] = torch.clamp(bboxes[:, 1], 0, im_h)
     bboxes[:, 3] = torch.clamp(bboxes[:, 3], 0, im_h)
 
     return bboxes

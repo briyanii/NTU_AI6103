@@ -5,14 +5,14 @@ from config import (
 from dataloader import get_dataloader
 import utils as U
 from torchvision.ops import nms
-from models import RPN
+from models import FasterRCNN
 from dataset import VOCDataset
 import torch
 import glob
 import pickle
 import os
 
-def load_latest_checkpoint():
+def load_latest_checkpoint(model):
     glob_path = checkpoint_filename_template.format(step="*")
     latest_checkpoint_path = None
     highest_step = -1
@@ -28,17 +28,20 @@ def load_latest_checkpoint():
         return
 
     path = checkpoint_filename_template.format(step=highest_step)
-    state = torch.load(path)
-    return state['model']
+    path = 'outputs/checkpoint_step1_34999.pt'
+    print(path)
+    state = torch.load(path, map_location='cpu')
+    model.load_state_dict(state['model'])
+    return model
 
 
 if __name__ == '__main__':
     with torch.no_grad():
-        model = RPN()
-
+        model = FasterRCNN()
         dataset = VOCDataset(2007, 'trainval')
+        n = 1#len(dataset)
         dataloader, _= get_dataloader(dataset,
-            num_samples=len(dataset),
+            num_samples=n,
             seed=None,
             batch_size=1,
             drop_last=True,
@@ -48,39 +51,14 @@ if __name__ == '__main__':
             shuffle=False
         )
 
-        state_dict = load_latest_checkpoint()
-        model.load_state_dict(state_dict)
+        model = load_latest_checkpoint(model)
 
         proposals = []
-        for i in range(len(dataset)):
+        for i in range(n):
             b = next(dataloader)
-            img, _ = b['x']
-            w = b['y']['width'][0]
-            h = b['y']['height'][0]
+            output, _ = model(inputs, None)
+            proposals.append(output['rpn_roi'])
 
-            outputs = model(img)
-            anchors = outputs.anchors
-            roi = outputs.roi_proposals
-            cls_softmax = outputs.cls_softmax
-            score = cls_softmax[0, :, 1] # 1 = fg, 0 = bg
-
-            # drop cross boundary anchors for training process
-            kept = U.drop_cross_boundary_boxes(anchors, w, h)
-            n_kept = kept.size(0) # ~60k
-            roi = roi[kept]
-            score = score[kept]
-
-            # nms
-            kept = nms(roi, score, .7)
-            n_kept = kept.size(0) # ~2k
-            score = score[kept]
-            roi = roi[kept]
-
-            indices = torch.full((n_kept, 1), i)
-            roi = torch.hstack([indices, roi.cpu()])
-            print('step {:15s}'.format(str(i+1)), roi.shape)
-            proposals.append(roi)
-
-        with open(roi_proposal_path, 'wb') as fp:
+        with open(roi_proposal_path + "_test", 'wb') as fp:
             pickle.dump(proposals, fp)
 
