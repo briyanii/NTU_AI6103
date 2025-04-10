@@ -483,7 +483,7 @@ class FasterRCNN(Module):
             # Fast RCNN is trained using the 2000 proposals
             score = cls_softmax[:, 1]
             kept = nms(roi_proposals, score, self.nms_th)
-            kept = kept[:2000] # N proposals
+            kept = kept[:self.config['n_proposals']] # N proposals
             cls_logits = cls_logits[kept]
             cls_softmax = cls_softmax[kept]
             bbox_reg = bbox_reg[kept]

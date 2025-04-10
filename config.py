@@ -35,6 +35,8 @@ config = {
     'rpn_step0': 60000,
     'rpn_step1': 20000,
 
+    # these are based on FAST RCNN where batch size = 2
+    # in practice, we will use batchsize = 1, double the training steps, and use accumulation steps = 2
     'fast_lr_0': 0.001,
     'fast_lr_1': 0.0001,
     'fast_step0': 30000,
@@ -44,6 +46,9 @@ config = {
     'sgd_momentum': .9,
 
     'nms_th': 0.7,
+
+    # train-time proposals = 2000
+    'n_proposals': 2000, 
 }
 
 config['areas'] = list(map(lambda x: x**2, config['scales']))
