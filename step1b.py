@@ -28,8 +28,6 @@ def load_latest_checkpoint(model):
         return
 
     path = checkpoint_filename_template.format(step=highest_step)
-    path = 'outputs/checkpoint_step1_34999.pt'
-    print(path)
     state = torch.load(path, map_location='cpu')
     model.load_state_dict(state['model'])
     return model
