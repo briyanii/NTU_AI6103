@@ -77,12 +77,16 @@ if __name__ == '__main__':
             return config['fast_lr_1']
 
     model = FasterRCNN()
+    # load state dict from previous step
+    load_state_dict(model)
 
-    # freeze up to conv3_1 (freeze conv1 and conv2)
+    # freeze backbone
     for n,m in model.features.named_parameters():
         m.requires_grad = False
+    # freeze RPN
     for n,m in model.rpn_layer.named_parameters():
         m.requires_grad = False
+    # train detection head only
 
     optimizer = SGD(model.parameters(), lr=config['fast_lr_0'], weight_decay=config['sgd_decay'], momentum=config['sgd_momentum'])
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
