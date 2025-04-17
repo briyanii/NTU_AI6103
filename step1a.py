@@ -22,13 +22,15 @@ class TrainerStep1(Trainer):
             sys.exit(1)
 
         s = step+1
-        if (s < 10) or (s % 100 == 0):
-            now = datetime.now()
-            now = now.ctime()
-            print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
-            sys.stdout.flush()
+        #if (s < 10) or (s % 100 == 0):
+        #if (s % 1000 == 0):
+        now = datetime.now()
+        now = now.ctime()
+        print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
+        sys.stdout.flush()
 
-        if (s in [1, 1000, 2000]) or (s % 5000 == 0):
+        #if (s in [1, 1000, 2000]) or (s % 5000 == 0):
+        if (s % 10000 == 0):
             path = checkpoint_filename_template.format(step=step)
             self.save_state(path)
             print("Saved", path)

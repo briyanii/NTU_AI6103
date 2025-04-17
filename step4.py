@@ -5,11 +5,12 @@ import os
 import glob
 import sys
 from trainer import Trainer
+import torch
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
 from config import (
     checkpoint_filename_template_4 as checkpoint_filename_template,
-    checkpoint_filename_template_3,
+    checkpoint_filename_template_3 as init_weight_path,
 )
 from config import config
 from models import FasterRCNN, FasterRCNN_FastLoss
@@ -24,12 +25,12 @@ class TrainerStep4(Trainer):
             sys.exit(1)
 
         s = step+1
-        if (s < 10) or (s % 100 == 0):
-            now = datetime.now()
-            now = now.ctime()
-            print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
+        now = datetime.now()
+        now = now.ctime()
+        print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
+        sys.stdout.flush()
 
-        if (s in [1, 1000, 2000]) or (s % 10000 == 0):
+        if (s % 10000 == 0):
             path = checkpoint_filename_template.format(step=step)
             self.save_state(path)
             print("Saved", path)
@@ -39,9 +40,8 @@ class TrainerStep4(Trainer):
         self.save_state(path)
         print("Saved", path)
 
-def get_latest_checkpoint_path(checkpoint_filename_template):
-    glob_path = checkpoint_filename_template.format(step="*")
-    latest_checkpoint_path = None
+def get_latest_checkpoint_path(template):
+    glob_path = template.format(step="*")
     highest_step = -1
 
     for filepath in glob.glob(glob_path):
@@ -53,15 +53,16 @@ def get_latest_checkpoint_path(checkpoint_filename_template):
 
     if highest_step == -1:
         return
-    return checkpoint_filename_template.format(step=highest_step)
+    return template.format(step=highest_step)
 
 def load_latest_checkpoint(trainer):
     path = get_latest_checkpoint_path(checkpoint_filename_template)
-    trainer.load_state(path)
+    if path:
+        trainer.load_state(path)
 
 def load_state_dict(model):
-    path = get_latest_checkpoint_path(checkpoint_filename_template_3)
-    state = torch.load(path)
+    path = get_latest_checkpoint_path(init_weight_path)
+    state = torch.load(path, map_location='cpu')
     model.load_state_dict(state['model'])
 
 dataloader_seed=13223
@@ -72,9 +73,9 @@ if __name__ == '__main__':
 
     def lr_lambda(step):
         if step < config['rpn_step0']:
-            return config['fast_lr_0']
+            return config['rpn_lr_0']
         else:
-            return config['fast_lr_1']
+            return config['rpn_lr_1']
 
     model = FasterRCNN()
     # load state dict from previous step
@@ -88,7 +89,7 @@ if __name__ == '__main__':
         m.requires_grad = False
     # train detection head only
 
-    optimizer = SGD(model.parameters(), lr=config['fast_lr_0'], weight_decay=config['sgd_decay'], momentum=config['sgd_momentum'])
+    optimizer = SGD(model.parameters(), lr=config['rpn_lr_0'], weight_decay=config['sgd_decay'], momentum=config['sgd_momentum'])
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
     criterion = FasterRCNN_FastLoss()
 

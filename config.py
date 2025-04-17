@@ -23,9 +23,10 @@ config = {
     'mini_neg_lo': 0,
     'mini_neg_hi': .5,
 
-    'rpn_loss_lambda': 10.0,
+    'rpn_loss_lambda': 1.0,#0.0,
     'rpn_sample_lo': .3,
     'rpn_sample_hi': .7,
+    #'rpn_sample_hi': .6,
     'rpn_sample_size': 256,
 
     'fast_loss_lambda': 1.0,

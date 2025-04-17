@@ -87,7 +87,6 @@ def get_dataloader(
 
             max_w = max(w, max_w)
             max_h = max(h, max_h)
-
             img = read_image(item['filepath'])
             img = v2.Resize((h,w), antialias=True)(img)
             img = transform(img)
@@ -107,12 +106,12 @@ def get_dataloader(
 
             if proposals:
                 roi = proposals[idx]
-                roi = roi[:, 1:]
+                if roi.size(1) == 5:
+                    roi = roi[:, 1:]
                 x1,y1,x2,y2 = roi.unbind(dim=1)
-                cond = (x1 < x2) & (y1 < y2) & (0 <= x1) & (0 <= y1)
+                #cond = (x1 < x2) & (y1 < y2) & (0 <= x1) & (0 <= y1)
                 if aug:
                     roi = torch.stack([w-x2,y1,w-x1,y2], dim=1)
-                roi = U.cat_val(roi, i)
                 rois.append(roi)
 
             cls.append(cids)
@@ -131,8 +130,8 @@ def get_dataloader(
 
         return batch
 
-    ls = list(zip(sampler, do_augment))
-    dataloader = DataLoader(ls, batch_size=batch_size, drop_last=drop_last, num_workers=num_workers, prefetch_factor=prefetch_factor, collate_fn=collate_fn)
+    sampler = list(islice(zip(sampler, do_augment), skip, None))
+    dataloader = DataLoader(sampler, batch_size=batch_size, drop_last=drop_last, num_workers=num_workers, prefetch_factor=prefetch_factor, collate_fn=collate_fn)
+    dataloader = iter(dataloader)
 
-    dataloader = islice(dataloader, skip, None)
     return dataloader, rng.initial_seed()

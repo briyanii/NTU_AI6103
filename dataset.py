@@ -1,4 +1,3 @@
-from torchvision.datasets import VOCDetection
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import v2
 import itertools

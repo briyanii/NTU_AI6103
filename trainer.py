@@ -1,3 +1,4 @@
+import sys
 import torch
 import numpy as np
 import itertools
@@ -83,7 +84,6 @@ class Trainer:
         y = batch['y']
         y['class_ids'] = list(map(lambda x: x.to(device), y['class_ids']))
         y['bboxes'] = list(map(lambda x: x.to(device), y['bboxes']))
-
         batch_pred, y = self.model(x, y)
 
         loss = self.criterion(batch_pred, y)
@@ -158,6 +158,7 @@ class Trainer:
             num_batch=number_of_batches,
             start_step=self.completed_steps,
         ))
+        sys.stdout.flush()
 
         self.before_train()
         self.zero_grad(None)
@@ -168,6 +169,8 @@ class Trainer:
             self.before_step(step)
 
             loss = self.train_one_step(step)
+            sys.stdout.flush()
+
             self.losses.append(loss)
             self.backpropagate(loss)
             self.optimizer_step(step)
@@ -241,7 +244,7 @@ class Trainer:
         accumulate = (step + 1) % self.accumulation_steps == 0
         self.should_zero_grad = accumulate
         self.should_step_optimizer = accumulate
-        self.should_step_scheduler = True
+        self.should_step_scheduler = accumulate
 
 '''
 class ExampleTrainerImpl(Trainer):

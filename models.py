@@ -347,10 +347,10 @@ class MultiTaskLoss(Module):
         super().__init__()
         self.lam = lam
         #self.lam = 1
-        self.classification_loss = CrossEntropyLoss(reduction='mean')
-        self.localization_loss = SmoothL1Loss(reduction='mean', beta=1.0)
+        self.classification_loss = CrossEntropyLoss(reduction='sum')
+        self.localization_loss = SmoothL1Loss(reduction='sum', beta=1.0)
 
-    def forward(self, cls_logits, cls_target, reg_prediction, reg_target):
+    def forward(self, cls_logits, cls_target, reg_prediction, reg_target, Ncls=1, Nreg=1):
         '''
             L(p,u,tu,v)
             p -> softmax over K+1 classes, 0 = background
@@ -359,11 +359,16 @@ class MultiTaskLoss(Module):
             tu -> predicted transformation (bbox regression prediction)
             v -> regression target
             = Lcls + lam * [u >= 1] Lloc
+
+            normalization terms, form fasterRCNN v3
+            N_cls = # of sampled ROIS
+            N_reg = # of anchors (??)
+            loss = 1/N_cls * L_cls + lam * 1/N_reg * L_reg
         '''
         reg_mask = (cls_target >= 1)
-        l_cls = self.classification_loss(cls_logits, cls_target)
+        l_cls = 1/Ncls * self.classification_loss(cls_logits, cls_target)
         if reg_mask.any():
-            l_loc = self.localization_loss(reg_prediction[reg_mask], reg_target[reg_mask])
+            l_loc = 1/Nreg * self.localization_loss(reg_prediction[reg_mask], reg_target[reg_mask])
         else:
             l_loc = 0.0
         loss = l_cls + self.lam * l_loc
@@ -373,10 +378,11 @@ class MultiTaskLoss(Module):
 class FasterRCNN(Module):
     # may be broken
     def __init__(self, 
-        #rpn_cfg, 
+        step=None,
         config=config,
     ):
         super().__init__()
+        self.step = step
         self.config = config
         backbone = Backbone()
         self.features = backbone.features # trainable
@@ -406,8 +412,6 @@ class FasterRCNN(Module):
         assert len(images) == 1
 
         x = images[0].unsqueeze(0) #( 1, 3, im_h, im_w)
-        im_h = x.size(2)
-        im_w = x.size(3)
         ft = self.features(x) #(1, C, H, W)
 
         # RPN head
@@ -421,7 +425,7 @@ class FasterRCNN(Module):
         roi_proposals = self.merge_layer(anchors.unsqueeze(0), bbox_reg.unsqueeze(0))
         roi_proposals = roi_proposals.squeeze()
 
-        if self.training or targets:
+        if self.training:
             # drop cross boundary
             kept = U.drop_cross_boundary_boxes(anchors, x.size(3), x.size(2)).to(ft.device) # reduces anchors from 20k to 6k
             cls_logits = cls_logits[kept]
@@ -429,7 +433,34 @@ class FasterRCNN(Module):
             bbox_reg = bbox_reg[kept]
             anchors = anchors[kept]
             roi_proposals = roi_proposals[kept]
+        else:
+            # apply fully convolutional RPN;
+            # clip proposals
+            roi_proposals = U.clip_bboxes(roi_proposals, x.size(3), x.size(2)).to(x.device)
 
+            # drop zero width/height
+            rxywh = U.xyxy_2_xywh(roi_proposals)
+            rw = rxywh[:, 2]
+            rh = rxywh[:, 3]
+            kept_mask = (rw > 0) & (rh > 0)
+            cls_logits = cls_logits[kept_mask]
+            cls_softmax = cls_softmax[kept_mask]
+            bbox_reg = bbox_reg[kept_mask]
+            anchors = anchors[kept_mask]
+            roi_proposals = roi_proposals[kept_mask]
+
+        # NMS is applied leaving 2000 proposals
+        # Fast RCNN is trained using the 2000 proposals
+        score = cls_softmax[:, 1]
+        kept = nms(roi_proposals, score, self.nms_th)
+        kept = kept[:self.config['n_proposals']] # N proposals
+        cls_logits = cls_logits[kept]
+        cls_softmax = cls_softmax[kept]
+        bbox_reg = bbox_reg[kept]
+        anchors = anchors[kept]
+        roi_proposals = roi_proposals[kept]
+
+        if self.training:
             # label anchors
             gt_bboxes, gt_class, pos_mask, neg_mask, ious = U.label_rois(
                 anchors,
@@ -455,7 +486,6 @@ class FasterRCNN(Module):
 
             outputs['rpn_iou'] = ious.max(dim=1)[0][sampled_idx]
             outputs['rpn_gtbboxes'] = gt_bboxes[sampled_idx]
-
             outputs['rpn_roi'] = roi_proposals[sampled_idx]
             outputs['rpn_cls_pred'] = cls_softmax.argmax(dim=1)[sampled_idx]
             outputs['rpn_cls_softmax'] = cls_softmax[sampled_idx]
@@ -466,30 +496,6 @@ class FasterRCNN(Module):
             outputs['rpn_anchors'] = anchors[sampled_idx]
 
         else:
-            # apply fully convolutional RPN;
-            # clip proposals
-            roi_proposals = U.clip_bboxes(roi_proposals, x.size(3), x.size(2)).to(x.device)
-
-            # drop zero width/height
-            _,_,rw,rh = xyxy_2_xywh(roi_proposals)
-            kept_mask = (rw > 0) & (rh > 0)
-            cls_logits = cls_logits[kept_mask]
-            cls_softmax = cls_softmax[kept_mask]
-            bbox_reg = bbox_reg[kept_mask]
-            anchors = anchors[kept_mask]
-            roi_proposals = roi_proposals[kept_mask]
-
-            # NMS is applied leaving 2000 proposals
-            # Fast RCNN is trained using the 2000 proposals
-            score = cls_softmax[:, 1]
-            kept = nms(roi_proposals, score, self.nms_th)
-            kept = kept[:self.config['n_proposals']] # N proposals
-            cls_logits = cls_logits[kept]
-            cls_softmax = cls_softmax[kept]
-            bbox_reg = bbox_reg[kept]
-            anchors = anchors[kept]
-            roi_proposals = roi_proposals[kept]
-
             outputs['rpn_roi'] = roi_proposals
             outputs['rpn_cls_softmax'] = cls_softmax
             outputs['rpn_cls_logits'] = cls_logits
@@ -497,25 +503,25 @@ class FasterRCNN(Module):
             outputs['rpn_bbox_reg'] = bbox_reg
             outputs['rpn_anchors'] = anchors
 
-        #out1 = RPNOutput(cls_logits, cls_softmax, bbox_reg, anchors, roi_proposals) # use the 6k anchors per image for training RPN
-
         if inputs[1] is None:
             rois = [roi_proposals]
         else:
             rois = inputs[1]
-        if self.training or targets:
+        roi_proposals = rois[0]
+
+        if self.training:
             # sample 128 for training, 25% of which are positive
-            images, roi_proposals, target_class, target_bbox = self.minibatch((images, rois), targets)
+            images, roi_proposals, target_class, target_bbox = self.minibatch((images, [roi_proposals]), targets)
             targets['gt_bboxes'] = target_bbox
             targets['gt_class'] = target_class
 
+        n_proposals = roi_proposals.size(0)
         # Detection Head
-        pooled_fts = self.detection_layer.roi_pool(ft, rois)
+        pooled_fts = self.detection_layer.roi_pool(ft, [roi_proposals])
         pooled_fts = pooled_fts.contiguous().view(roi_proposals.size(0), -1)
         cls_logits, cls_softmax, bbox_reg = self.detection_layer(pooled_fts)
         cls_pred = cls_softmax.argmax(dim=1)
 
-        n_proposals = roi_proposals.size(0)
         indices = torch.arange(n_proposals)
         if self.training or targets:
             # (N, K, 4) -> (N, 4)
@@ -533,9 +539,10 @@ class FasterRCNN(Module):
 
         else:
             # NMS applied for each non-bg class indepedently
-            outputs = []
-            for i in range(1, cls_softmax.size(0)):
+            per_class = []
+            for i in range(1, cls_softmax.size(1)):
                 pred_cls = torch.full((n_proposals,), i)
+                pred_cls = pred_cls.to(x.device)
                 _logits = cls_logits[indices, i]
                 _scores = cls_softmax[indices, i]
                 _bbox_reg = bbox_reg[indices, i]
@@ -543,13 +550,13 @@ class FasterRCNN(Module):
                 _bbox_pred = _bbox_pred.squeeze()
                 kept = nms(_bbox_pred, _scores, self.nms_th)
 
-                outputs.append([
+                per_class.append([
                     pred_cls[kept],
                     _scores[kept],
                     _bbox_pred[kept],
                 ])
 
-            pred_cls, scores, bbox_pred = zip(*outputs)
+            pred_cls, scores, bbox_pred = zip(*per_class)
 
             pred_cls = torch.cat(pred_cls)
             scores = torch.cat(scores)
@@ -630,7 +637,8 @@ class FastRCNN_Loss(MultiTaskLoss):
 
 class FasterRCNN_RPNLoss(MultiTaskLoss):
     def __init__(self, config=config):
-        super().__init__(lam=config['rpn_loss_lambda'])
+        lam = config['rpn_loss_lambda']
+        super().__init__(lam=lam)
         self.config = config
 
     def forward(self, outputs, y):
@@ -638,7 +646,10 @@ class FasterRCNN_RPNLoss(MultiTaskLoss):
         cls_tgt = outputs['rpn_cls_target']
         bbox_reg = outputs['rpn_bbox_reg']
         bbox_tgt = outputs['rpn_reg_target']
-        loss = super().forward(cls_logits, cls_tgt, bbox_reg, bbox_tgt)
+
+        nreg = torch.where(cls_tgt >= 1, 1, 0).sum()
+        ncls = cls_logits.size(0)
+        loss = super().forward(cls_logits, cls_tgt, bbox_reg, bbox_tgt, Ncls=ncls, Nreg=nreg)
         return loss
 
 class FasterRCNN_FastLoss(MultiTaskLoss):
@@ -651,6 +662,9 @@ class FasterRCNN_FastLoss(MultiTaskLoss):
         cls_tgt = outputs['det_cls_target']
         bbox_reg = outputs['det_bbox_reg']
         bbox_tgt = outputs['det_reg_target']
-        loss = super().forward(cls_logits, cls_tgt, bbox_reg, bbox_tgt)
+
+        nreg = torch.where(cls_tgt >= 1, 1, 0).sum()
+        ncls = cls_logits.size(0)
+        loss = super().forward(cls_logits, cls_tgt, bbox_reg, bbox_tgt, Ncls=ncls, Nreg=nreg)
         return loss
 

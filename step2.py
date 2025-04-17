@@ -24,12 +24,14 @@ class TrainerStep2(Trainer):
             sys.exit(1)
 
         s = step+1
-        if (s < 10) or (s % 100 == 0):
-            now = datetime.now()
-            now = now.ctime()
-            print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
+        #if (s < 10) or (s % 100 == 0):
+        now = datetime.now()
+        now = now.ctime()
+        print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
+        sys.stdout.flush()
 
-        if (s in [1, 1000, 2000]) or (s % 10000 == 0):
+        #if (s in [1, 1000, 2000]) or (s % 10000 == 0):
+        if (s % 10000 == 0):
             path = checkpoint_filename_template.format(step=step)
             self.save_state(path)
             print("Saved", path)
@@ -65,9 +67,9 @@ if __name__ == '__main__':
 
     def lr_lambda(step):
         if step < config['rpn_step0']:
-            return config['fast_lr_0']
+            return config['rpn_lr_0']
         else:
-            return config['fast_lr_1']
+            return config['rpn_lr_1']
 
     model = FasterRCNN()
 

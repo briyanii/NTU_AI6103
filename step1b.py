@@ -12,6 +12,8 @@ import glob
 import pickle
 import os
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 def load_latest_checkpoint(model):
     glob_path = checkpoint_filename_template.format(step="*")
     latest_checkpoint_path = None
@@ -28,16 +30,16 @@ def load_latest_checkpoint(model):
         return
 
     path = checkpoint_filename_template.format(step=highest_step)
-    state = torch.load(path, map_location='cpu')
+    state = torch.load(path, map_location=device)
     model.load_state_dict(state['model'])
-    return model
 
 
 if __name__ == '__main__':
     with torch.no_grad():
-        model = FasterRCNN()
         dataset = VOCDataset(2007, 'trainval')
-        n = 1#len(dataset)
+        print('dataset ready')
+
+        n = len(dataset)
         dataloader, _= get_dataloader(dataset,
             num_samples=n,
             seed=None,
@@ -46,17 +48,32 @@ if __name__ == '__main__':
             skip=0,
             augment=False,
             normalize=True,
-            shuffle=False
+            shuffle=False,
+            num_workers=2,
+            prefetch_factor=2
         )
+        print('dataloader ready')
 
-        model = load_latest_checkpoint(model)
+        model = FasterRCNN()
+        model = model.to(device)
+        load_latest_checkpoint(model)
+        model.eval()
+        print('modedl ready')
 
         proposals = []
-        for i in range(n):
-            b = next(dataloader)
-            output, _ = model(inputs, None)
-            proposals.append(output['rpn_roi'])
+        i = 0
+        for b in dataloader:
+            images, _ = b['x']
+            images[0] = images[0].to(device)
+            inputs = (images, None)
+            targets = None
+            output, _ = model(inputs, targets)
+            proposals.append(output['rpn_roi'].cpu())
+            print(f'{i} of {n} done')
+            i += 1
 
-        with open(roi_proposal_path + "_test", 'wb') as fp:
+        print('proposals generated')
+        with open(roi_proposal_path, 'wb') as fp:
             pickle.dump(proposals, fp)
+        print('saved to', roi_proposal_path)
 
