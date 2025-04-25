@@ -3,10 +3,9 @@
 - Fast RCNN: https://arxiv.org/pdf/1504.08083
 
 # Steps (WIP)
-1. `python download.py` to download the required dataset / model weights
-2. `python step1a.py` run training script for RPN
-3. `python step1b.py` run script to get RPN roi proposals for step2
-4. `python step2.py` run training script for FastRCNN Detection Head
-5. `python step3.py` run training script for FasterRCNN RPN Head
-6. `python step4.py` run training script for FasterRCNN Detection Head
+0. install `conda`
+1. `conda env create -f environment.yml -n MyEnv` create conda environment
+2. `conda activate MyEnv` activate conda env
+3. `python download.py` to download the required dataset / model weights
+4. `sh train_4step.sh` to run the 4 step training as described in the paper
 
