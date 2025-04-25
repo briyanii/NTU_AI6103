@@ -4,7 +4,7 @@ import pickle
 import os
 import glob
 import sys
-from trainer import Trainer
+from trainer import Trainer, get_latest_checkpoint
 import torch
 from torch.optim import SGD
 from torch.optim.lr_scheduler import LambdaLR
@@ -16,52 +16,10 @@ from config import config
 from models import FasterRCNN, FasterRCNN_FastLoss
 from dataset import VOCDataset
 
-class TrainerStep4(Trainer):
-    def after_step(self, step, loss):
-        if loss.isnan():
-            path = checkpoint_filename_template.format(step=step)
-            self.save_state(path+'.nan')
-            print("step {} Loss is NaN. Check for issues?".format(step))
-            sys.exit(1)
-
-        s = step+1
-        now = datetime.now()
-        now = now.ctime()
-        print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
-        sys.stdout.flush()
-
-        if (s % 10000 == 0):
-            path = checkpoint_filename_template.format(step=step)
-            self.save_state(path)
-            print("Saved", path)
-
-    def after_train(self):
-        path = checkpoint_filename_template.format(step=self.training_steps)
-        self.save_state(path)
-        print("Saved", path)
-
-def get_latest_checkpoint_path(template):
-    glob_path = template.format(step="*")
-    highest_step = -1
-
-    for filepath in glob.glob(glob_path):
-        filename = os.path.split(filepath)[1]
-        step = filename.split('_')[-1]
-        step = step.split('.pt')[0]
-        step = int(step)
-        highest_step = max(highest_step, int(step))
-
-    if highest_step == -1:
-        return
-    return template.format(step=highest_step)
-
-def load_latest_checkpoint(trainer):
-    path = get_latest_checkpoint_path(checkpoint_filename_template)
-    if path:
-        trainer.load_state(path)
-
 def load_state_dict(model):
-    path = get_latest_checkpoint_path(init_weight_path)
+    path = get_latest_checkpoint(init_weight_path)
+    if path is None:
+        return
     state = torch.load(path, map_location='cpu')
     model.load_state_dict(state['model'])
 
@@ -73,9 +31,9 @@ if __name__ == '__main__':
 
     def lr_lambda(step):
         if step < config['rpn_step0']:
-            return config['rpn_lr_0']
+            return 1
         else:
-            return config['rpn_lr_1']
+            return config['rpn_lr_1']/config['rpn_lr_0']
 
     model = FasterRCNN()
     # load state dict from previous step
@@ -93,7 +51,7 @@ if __name__ == '__main__':
     scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
     criterion = FasterRCNN_FastLoss()
 
-    trainer = TrainerStep4(
+    trainer = Trainer(
         dataset=dataset,
         model=model,
         optimizer=optimizer,
@@ -110,6 +68,8 @@ if __name__ == '__main__':
         shuffle=True,
         num_workers=2,
         prefetch_factor=2,
+        checkpoint_template=checkpoint_filename_template,
+        experiment_tags=['step4']
     )
 
     load_latest_checkpoint(trainer)

@@ -35,6 +35,16 @@ def load_latest_checkpoint(model):
 
 
 if __name__ == '__main__':
+    experiment = Experiment(
+        project_name="faster-rcnn",
+        workspace="ai6103",
+        auto_param_logging=False,
+        auto_metric_logging=False,
+        auto_output_logging=False,
+        auto_log_co2=False,
+        log_code=False
+    )
+    experiment.add_tag("step1b")
     with torch.no_grad():
         dataset = VOCDataset(2007, 'trainval')
         print('dataset ready')
@@ -58,7 +68,7 @@ if __name__ == '__main__':
         model = model.to(device)
         load_latest_checkpoint(model)
         model.eval()
-        print('modedl ready')
+        print('moded ready')
 
         proposals = []
         i = 0
@@ -69,11 +79,14 @@ if __name__ == '__main__':
             targets = None
             output, _ = model(inputs, targets)
             proposals.append(output['rpn_roi'].cpu())
-            print(f'{i} of {n} done')
+            msg = f'{i} of {n} done')
+            experiment.log_text(msg)
+            print(msg)
             i += 1
 
         print('proposals generated')
         with open(roi_proposal_path, 'wb') as fp:
             pickle.dump(proposals, fp)
         print('saved to', roi_proposal_path)
+        experiment.log_asset(roi_proposal_path)
 

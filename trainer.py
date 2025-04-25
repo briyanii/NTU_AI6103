@@ -1,12 +1,36 @@
 import sys
+from datetime import datetime
+import glob
 import torch
 import numpy as np
 import itertools
 import os
 import time
 from dataloader import get_dataloader
+from comet_ml import Experiment
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+def extract_step_from_path(path):
+    filename = os.path.split(path)[1]
+    step = filename.split('_')[-1]
+    step = step.split('.pt')[0]
+    step = int(step)
+    return step
+
+def get_latest_checkpoint(template):
+    glob_path = template.format(step='*')
+    highest_step = -1
+
+    for filepath in glob.glob(glob_path):
+        step = extract_step_from_path(filepath)
+        highest_step = max(highest_step, int(step))
+
+    if highest_step == -1:
+        return None
+    path = template.format(step=highest_step)
+    return path
 
 class Trainer:
     def __init__(self,
@@ -27,6 +51,8 @@ class Trainer:
         roi_proposal_path=None,
         num_workers=0,
         prefetch_factor=None,
+        checkpoint_template=None,
+        experiment_tags=[],
     ):
         # constants
         self.dataset = dataset
@@ -35,7 +61,7 @@ class Trainer:
         self.optimizer = optimizer
         self.scheduler = scheduler
 
-
+        self.checkpoint_template = checkpoint_template
         self.accumulation_steps = accumulation_steps
 
         self.training_steps = steps
@@ -66,7 +92,17 @@ class Trainer:
 
         # track losses
         self.losses = []
-
+        self.experiment = Experiment(
+            project_name="faster-rcnn",
+            workspace="ai6103",
+            auto_param_logging=False,
+            auto_metric_logging=False,
+            auto_output_logging=False,
+            auto_log_co2=False,
+            log_code=False
+        )
+        for tag in experiment_tags:
+            self.experiment.add_tag(tag)
 
     def train_one_step(self, step):
         batch = next(self.dataloader)
@@ -152,12 +188,16 @@ class Trainer:
             'Drop last: {drop_last}\n'
             '----------------'
         )
-        print(str_template.format(
+        str_formatted = str_template.format(
             num_steps=self.training_steps,
             drop_last=self.drop_last,
             num_batch=number_of_batches,
             start_step=self.completed_steps,
-        ))
+        )
+
+        self.experiment.log_text(str_formatted)
+        print(str_formatted)
+
         sys.stdout.flush()
 
         self.before_train()
@@ -234,11 +274,58 @@ class Trainer:
     def before_train(self):
         pass
 
+    def save_and_overwrite(self, save_step):
+        # save checkpoint
+        save_path = self.checkpoint_template.format(step=save_step)
+        self.save_state(save_path)
+        if not os.path.exists(save_path):
+            msg = "Failed to save {}".format(save_path)
+            self.experiment.log_text(msg)
+            print(msg)
+            return None
+        else:
+            msg = "Saved {}".format(save_path)
+            self.experiment.log_text(msg)
+            self.experiment.log_asset(save_path)
+            print(msg)
+        # remove other checkpoints once saved
+        glob_path = self.checkpoint_template.format(step='*')
+        for path in glob.glob(glob_path):
+            step = extract_step_from_path(path)
+            if step == save_step:
+                continue
+            os.remove(path)
+        return save_path
+
     def after_train(self):
-        pass
+        path = self.save_and_overwrite(self.training_steps)
 
     def after_step(self, step, loss):
-        pass
+        if loss.isnan():
+            path = self.checkpoint_template.format(step=step)
+            self.save_state(path + '.nan')
+            msg = "step {} Loss is NaN. Check for issues? exiting".format(step)
+            self.experiment.log_text(msg)
+            print(msg)
+            sys.exit(1)
+
+        s = step+1
+        now = datetime.now()
+        now = now.ctime()
+        msg = "{} - step {} | loss = {:.3f}".format(now, step, loss.item())
+        print(msg)
+        sys.stdout.flush()
+        self.experiment.log_metric('train_loss', loss.item(), step=step)
+
+        #if (s in [1, 1000, 2000]) or (s % 5000 == 0):
+        if (s % 10000 == 0):
+            path = self.save_and_overwrite(step)
+
+    def load_latest_checkpoint(self):
+        path = get_latest_checkpoint(self.checkpoint_template)
+        if path is None:
+            return
+        self.load_state(path)
 
     def before_step(self, step):
         accumulate = (step + 1) % self.accumulation_steps == 0
