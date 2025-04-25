@@ -31,6 +31,7 @@ f3=outputs/checkpoint_step2_80000.pt
 f4=outputs/checkpoint_step3_80000.pt
 f5=outputs/checkpoint_step4_80000.pt
 
+mkdir -p outputs
 pre_post_check "" step1a.py $f1
 pre_post_check $f1 step1b.py $f2
 pre_post_check $f2 step2.py $f3
