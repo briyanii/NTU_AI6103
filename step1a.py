@@ -13,60 +13,15 @@ import sys
 import glob
 import os
 
-class TrainerStep1(Trainer):
-    def after_step(self, step, loss):
-        if loss.isnan():
-            path = checkpoint_filename_template.format(step=step)
-            self.save_state(path + '.nan')
-            print("step {} Loss is NaN. Check for issues?".format(step))
-            sys.exit(1)
-
-        s = step+1
-        #if (s < 10) or (s % 100 == 0):
-        #if (s % 1000 == 0):
-        now = datetime.now()
-        now = now.ctime()
-        print("{} - step {} of {} | loss = {:.3f}".format(now, s, self.training_steps, loss.item()))
-        sys.stdout.flush()
-
-        #if (s in [1, 1000, 2000]) or (s % 5000 == 0):
-        if (s % 10000 == 0):
-            path = checkpoint_filename_template.format(step=step)
-            self.save_state(path)
-            print("Saved", path)
-
-    def after_train(self):
-        path = checkpoint_filename_template.format(step=self.training_steps)
-        self.save_state(path)
-        print("Saved", path)
-
-def load_latest_checkpoint(trainer):
-    glob_path = checkpoint_filename_template.format(step="*")
-    latest_checkpoint_path = None
-    highest_step = -1
-
-    for filepath in glob.glob(glob_path):
-        filename = os.path.split(filepath)[1]
-        step = filename.split('_')[-1]
-        step = step.split('.pt')[0]
-        step = int(step)
-        highest_step = max(highest_step, int(step))
-
-    if highest_step == -1:
-        return
-
-    path = checkpoint_filename_template.format(step=highest_step)
-    trainer.load_state(path)
-
 dataloader_seed=54321
 _dataset = (2007, 'trainval')
 
 if __name__ == '__main__':
     def lr_lambda(step):
         if step < config['rpn_step0']:
-            return config['rpn_lr_0']
+            return 1
         else:
-            return config['rpn_lr_1']
+            return config['rpn_lr_1']/config['rpn_lr_0']
 
     model = FasterRCNN()
 
@@ -83,7 +38,7 @@ if __name__ == '__main__':
     criterion = FasterRCNN_RPNLoss()
     dataset = VOCDataset(*_dataset)
 
-    trainer = TrainerStep1(
+    trainer = Trainer(
         dataset=dataset,
         model=model,
         optimizer=optimizer,
@@ -99,9 +54,10 @@ if __name__ == '__main__':
         accumulation_steps=1,
         num_workers=2,
         prefetch_factor=2,
+        checkpoint_template=checkpoint_filename_template,
+        experiment_tags=['step1a']
     )
 
-    load_latest_checkpoint(trainer)
-
+    trainer.load_latest_checkpoint()
     trainer.train()
     print("DONE")
