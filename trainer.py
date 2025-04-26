@@ -99,6 +99,7 @@ class Trainer:
             auto_metric_logging=False,
             auto_output_logging=False,
             auto_log_co2=False,
+            auto_metric_step_rate=200,
             log_code=False
         )
         self.experiment.add_tag('training')
@@ -308,6 +309,7 @@ class Trainer:
             msg = "step {} Loss is NaN. Check for issues? exiting".format(step)
             #self.experiment.log_text(msg)
             self.experiment.log_asset(path)
+            self.log_text(f'step={step} failed', step=step)
             print(msg)
             sys.exit(1)
 
@@ -318,6 +320,7 @@ class Trainer:
         print(msg)
         sys.stdout.flush()
         self.experiment.log_metric('train_loss', loss.item(), step=step)
+        self.experiment.log_text(f'{now} - step={step} | loss={loss}', step=step)
 
         #if (s in [1, 1000, 2000]) or (s % 5000 == 0):
         if (s % 10000 == 0):
