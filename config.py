@@ -17,7 +17,8 @@ config = {
     'det_std_box': 0.001,
     'det_bias': 0.0,
 
-    'mini_R': 128,
+    #'mini_R': 128,
+    'mini_R': 64,
     'mini_pos_ratio': .25,
     'mini_pos_th': .5,
     'mini_neg_lo': 0,

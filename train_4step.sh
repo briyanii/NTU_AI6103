@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # STEPS
 # train model, save model state
 # load latest state from step1a, generate proposals

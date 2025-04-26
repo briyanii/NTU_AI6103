@@ -64,5 +64,5 @@ if __name__ == '__main__':
         experiment_tags=['step2']
     )
 
-    load_latest_checkpoint(trainer)
+    trainer.load_latest_checkpoint()
     trainer.train()
