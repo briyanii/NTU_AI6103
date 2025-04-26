@@ -280,12 +280,12 @@ class Trainer:
         self.save_state(save_path)
         if not os.path.exists(save_path):
             msg = "Failed to save {}".format(save_path)
-            self.experiment.log_text(msg)
+            #self.experiment.log_text(msg)
             print(msg)
             return None
         else:
             msg = "Saved {}".format(save_path)
-            self.experiment.log_text(msg)
+            #self.experiment.log_text(msg)
             self.experiment.log_asset(save_path)
             print(msg)
         # remove other checkpoints once saved
@@ -302,10 +302,11 @@ class Trainer:
 
     def after_step(self, step, loss):
         if loss.isnan():
-            path = self.checkpoint_template.format(step=step)
-            self.save_state(path + '.nan')
+            path = self.checkpoint_template.format(step=step) + '.nan'
+            self.save_state(path)
             msg = "step {} Loss is NaN. Check for issues? exiting".format(step)
-            self.experiment.log_text(msg)
+            #self.experiment.log_text(msg)
+            self.experiment.log_asset(path)
             print(msg)
             sys.exit(1)
 

@@ -11,6 +11,7 @@ import torch
 import glob
 import pickle
 import os
+from comet_ml import Experiment
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -79,8 +80,8 @@ if __name__ == '__main__':
             targets = None
             output, _ = model(inputs, targets)
             proposals.append(output['rpn_roi'].cpu())
-            msg = f'{i} of {n} done')
-            experiment.log_text(msg)
+            msg = f'{i} of {n} done'
+            experiment.log_text(msg, step=i)
             print(msg)
             i += 1
 
