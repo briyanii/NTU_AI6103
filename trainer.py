@@ -101,6 +101,7 @@ class Trainer:
             auto_log_co2=False,
             log_code=False
         )
+        self.experiment.add_tag('training')
         for tag in experiment_tags:
             self.experiment.add_tag(tag)
 

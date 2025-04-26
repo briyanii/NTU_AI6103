@@ -548,6 +548,19 @@ class FasterRCNN(Module):
                 _bbox_reg = bbox_reg[indices, i]
                 _bbox_pred = self.merge_layer(roi_proposals.unsqueeze(0), _bbox_reg.unsqueeze(0))
                 _bbox_pred = _bbox_pred.squeeze()
+
+                # clip predicted bbox to to image size
+                _bbox_pred = U.clip_bboxes(_bbox_pred, x.size(3), x.size(2)).to(x.device)
+
+                # keep non zero-width/height
+                xywh = U.xyxy_2_xywh(_bbox_pred)
+                keep = (xywh[:,2] > 0) & (xywh[:,3] > 0)
+                _bbox_pred = _bbox_pred[keep]
+                _logits = _logits[keep]
+                _scores = _scores[keep]
+                pred_cls = pred_cls[keep]
+
+                # NMS
                 kept = nms(_bbox_pred, _scores, self.nms_th)
 
                 per_class.append([

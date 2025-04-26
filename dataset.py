@@ -24,7 +24,7 @@ class VOCDataset(Dataset):
                 name = c.text
             elif tag == 'bndbox':
                 bbox = self.parse_bndbox(c)
-            class_id = self.object_categories.index(name)
+            class_id = self.object_categories.index(name) + 1
         return name, class_id, bbox
 
     def parse_size(self, root):
