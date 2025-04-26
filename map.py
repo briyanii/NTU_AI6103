@@ -1,3 +1,6 @@
+import os
+import json
+
 import torch
 from torchvision import transforms
 from torchvision.datasets import VOCDetection
@@ -19,16 +22,30 @@ PRED_BOX_NUM = 300
 IOU_THRESHOLD = 0.5
 
 def construct_gt_box_list_by_class(year='2007', image_set='test', class2idx=CLASS2IDX):
-  '''
-  Returns all gt boxes organized by class:
-  [[{image_id: int, gt_coordinates: list of 4 coordinates}, ...], [], [], ...]
+    '''
+    Returns all gt boxes organized by class:
+    [[{image_id: int, gt_coordinates: list of 4 coordinates}, ...], [], [], ...]
+    
+    A list of 20 lists of gt boxes.
+    '''
+    save_path = f'./data/voc_{year}_{image_set}.json'
 
-  A list of 20 lists of gt boxes.
-  '''
+    # If file exists, load and return
+    if os.path.exists(save_path):
+        print("Ground truth file exists, loading directly...")
+        with open(save_path, 'r') as f:
+            gt_box_list_by_class = json.load(f)
+        return gt_box_list_by_class
+
+    # Otherwise, construct the gt box list
+    print("Constructing ground truth list...")
     gt_box_list_by_class = [[] for _ in range(20)]
     voc_test = VOCDetection(root='./data', year=year, image_set=image_set, download=False)
     for image_id, image in enumerate(voc_test):
+        print(f"Processing image {image_id}...")
         obj_list = image[1]['annotation']['object']
+        if isinstance(obj_list, dict):  # If only one object, wrap it into a list
+            obj_list = [obj_list]
         for obj in obj_list:
             xmin = float(obj['bndbox']['xmin'])
             ymin = float(obj['bndbox']['ymin'])
@@ -36,6 +53,13 @@ def construct_gt_box_list_by_class(year='2007', image_set='test', class2idx=CLAS
             ymax = float(obj['bndbox']['ymax'])
             gt_box = {'image_id': image_id, 'gt_coordinates': [xmin, ymin, xmax, ymax]}
             gt_box_list_by_class[class2idx[obj['name']] - 1].append(gt_box)
+
+    # Save to JSON
+    with open(save_path, 'w') as f:
+        json.dump(gt_box_list_by_class, f)
+
+    print("Ground truth box list constructed and saved.")
+
     return gt_box_list_by_class
 
 '''
@@ -49,13 +73,13 @@ Below are the filtering functions for the predicted boxes.
 '''
 
 def filter_single_inference_per_image(image_id, outputs, current_list_of_pred, pred_box_num=PRED_BOX_NUM):
-  '''
-  300 boxes per image
-  '''
+    '''
+    300 boxes per image
+    '''
 
-    cls_pred = outputs['det_cls_pred'].cpu().tolist()
-    bbox_pred = outputs['det_bbox_pred'].cpu().tolist()
-    score = outputs['det_score'].cpu().tolist()
+    cls_pred = outputs[0]['det_cls_pred'].cpu().tolist()
+    bbox_pred = outputs[0]['det_bbox_pred'].cpu().tolist()
+    score = outputs[0]['det_score'].cpu().tolist()
 
     top_indices = sorted(range(len(score)), key=lambda i: score[i], reverse=True)[:pred_box_num]
     filter_pred_bbox = [bbox_pred[i] for i in top_indices]
@@ -70,40 +94,42 @@ def filter_single_inference_per_image(image_id, outputs, current_list_of_pred, p
 
 
 def filter_single_inference_per_class(image_id, outputs, current_list_of_pred, pred_box_num=PRED_BOX_NUM):
-  '''
-  300 boxes per class per image
-  '''
+    '''
+    300 boxes per class per image
+    '''
 
-    cls_pred = outputs['det_cls_pred'].cpu().tolist()
-    bbox_pred = outputs['det_bbox_pred'].cpu().tolist()
-    score = outputs['det_score'].cpu().tolist()
+    cls_pred = outputs[0]['det_cls_pred'].cpu().tolist()
+    bbox_pred = outputs[0]['det_bbox_pred'].cpu().tolist()
+    score = outputs[0]['det_score'].cpu().tolist()
 
     for class_idx in range(1, 21):
-        pred_bbox_single_class = bbox_pred[cls_pred == class_idx]
-        pred_score_single_class = score[cls_pred == class_idx]
+        # pred_bbox_single_class = bbox_pred[cls_pred == class_idx]
+        # pred_score_single_class = score[cls_pred == class_idx]
+        pred_bbox_single_class = [b for b, c in zip(bbox_pred, cls_pred) if c == class_idx]
+        pred_score_single_class = [s for s, c in zip(score, cls_pred) if c == class_idx]
 
         top_indices = sorted(range(len(pred_score_single_class)), key=lambda i: pred_score_single_class[i], reverse=True)[:pred_box_num]
         filter_pred_bbox_single_class = [pred_bbox_single_class[i] for i in top_indices]
         filter_score_single_class = [pred_score_single_class[i] for i in top_indices]
         for box_idx, pred_bbox in enumerate(filter_pred_bbox_single_class):
-            pred_box = {'image_id': image_id, 'pred_coordinates': pred_bbox.tolist(), 'confidence_score': filter_score_single_class[box_idx]}
+            pred_box = {'image_id': image_id, 'pred_coordinates': pred_bbox, 'confidence_score': filter_score_single_class[box_idx]}
             current_list_of_pred[class_idx - 1].append(pred_box)
 
     return current_list_of_pred
 
 def filter_single_inference_confidence(image_id, outputs, current_list_of_pred, confidence_threshold=0.1):
-  '''
-  predictions that have confidence score above threshold
-  '''
-    cls_pred = outputs['det_cls_pred'].cpu().tolist()
-    bbox_pred = outputs['det_bbox_pred'].cpu().tolist()
-    score = outputs['det_score'].cpu().tolist()
+    '''
+    predictions that have confidence score above threshold
+    '''
+    cls_pred = outputs[0]['det_cls_pred'].cpu().tolist()
+    bbox_pred = outputs[0]['det_bbox_pred'].cpu().tolist()
+    score = outputs[0]['det_score'].cpu().tolist()
 
-    filter_pred_bbox = bbox_pred[score > confidence_threshold]
-    filter_score = score[score > confidence_threshold]
-    filter_cls_pred = cls_pred[score > confidence_threshold]
+    filter_pred_bbox = [b for b, s in zip(bbox_pred, score) if s > confidence_threshold]
+    filter_score = [s for s in score if s > confidence_threshold]
+    filter_cls_pred = [c for c, s in zip(cls_pred, score) if s > confidence_threshold]
     for box_idx, pred_bbox in enumerate(filter_pred_bbox):
-        pred_box = {'image_id': image_id, 'pred_coordinates': pred_bbox.tolist(), 'confidence_score': filter_score[box_idx]}
+        pred_box = {'image_id': image_id, 'pred_coordinates': pred_bbox, 'confidence_score': filter_score[box_idx]}
         pred_class = filter_cls_pred[box_idx]
         current_list_of_pred[pred_class - 1].append(pred_box)
 
@@ -111,20 +137,27 @@ def filter_single_inference_confidence(image_id, outputs, current_list_of_pred, 
 
 
 def filter_single_inference_entire_set(image_id, outputs, current_list_of_pred, filter_threshold, pred_box_num=PRED_BOX_NUM):
-  '''
-  300 boxes per class for the entire set
-  '''
-    cls_pred = outputs['det_cls_pred'].cpu().tolist()
-    bbox_pred = outputs['det_bbox_pred'].cpu().tolist()
-    score = outputs['det_score'].cpu().tolist()
+    '''
+    300 boxes per class for the entire set
+    '''
+    cls_pred = outputs[0]['det_cls_pred'].cpu().tolist()
+    bbox_pred = outputs[0]['det_bbox_pred'].cpu().tolist()
+    score = outputs[0]['det_score'].cpu().tolist()
 
     for class_idx in range(1, 21):
-        pred_bbox_single_class = bbox_pred[cls_pred == class_idx]
-        pred_score_single_class = score[cls_pred == class_idx]
-        filter_pred_bbox_single_class = pred_bbox_single_class[pred_score_single_class > filter_threshold[class_idx - 1]]
-        filter_score_single_class = pred_score_single_class[pred_score_single_class > filter_threshold[class_idx - 1]]
+        pred_bbox_single_class = [b for b, c in zip(bbox_pred, cls_pred) if c == class_idx]
+        pred_score_single_class = [s for s, c in zip(score, cls_pred) if c == class_idx]
+        filter_pred_bbox_single_class = [
+            b for b, s in zip(pred_bbox_single_class, pred_score_single_class)
+            if s > filter_threshold[class_idx - 1]
+        ]
+        filter_score_single_class = [
+            s for s in pred_score_single_class
+            if s > filter_threshold[class_idx - 1]
+        ]
+
         for box_idx, pred_bbox in enumerate(filter_pred_bbox_single_class):
-            pred_box = {'image_id': image_id, 'pred_coordinates': pred_bbox.tolist(), 'confidence_score': filter_score_single_class[box_idx].item()}
+            pred_box = {'image_id': image_id, 'pred_coordinates': pred_bbox, 'confidence_score': filter_score_single_class[box_idx]}
             current_list_of_pred[class_idx - 1].append(pred_box)
 
         # truncate prediction list and update thresold
@@ -137,10 +170,12 @@ def filter_single_inference_entire_set(image_id, outputs, current_list_of_pred, 
 
 def construct_pred_box_list_by_class(model, device, year='2007', image_set='test'):
     # Initialize
+    print("Constructing prediction list...")
     filter_threshold = [0 for _ in range(20)]
     list_of_pred = [[] for _ in range(20)]
     voc_test = VOCDetection(root='./data', year=year, image_set=image_set, download=False)
     for image_id, image in enumerate(voc_test):
+        print(f"Processing image {image_id}...")
         img = image[0]
         to_tensor = transforms.ToTensor()
         tensor_img = to_tensor(img)
@@ -154,6 +189,7 @@ def construct_pred_box_list_by_class(model, device, year='2007', image_set='test
 
         list_of_pred, filter_threshold = filter_single_inference_entire_set(image_id, outputs, list_of_pred, filter_threshold) # can be modified
 
+    print("Prediction list constructed.")
     return list_of_pred
 
 def compute_iou(boxes1, boxes2):
@@ -260,6 +296,9 @@ def compute_precision_recall_ap(class_idx, gt_boxes, pred_boxes, iou_threshold=I
     # plot Precision-Recall curve
     # plt.show()
     if save_pr_plot:
+        
+        os.makedirs('./outputs/pr_curves', exist_ok=True)
+
         plt.figure(figsize=(8,6))
         plt.plot(recalls, precisions, marker='.')
         plt.xlabel('Recall')

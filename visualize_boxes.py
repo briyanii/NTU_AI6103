@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torchvision.datasets import VOCDetection
 from torchvision import transforms
@@ -31,21 +33,21 @@ def visualize_single_inference(model, image, device, save_path, score_threshold=
     with torch.no_grad():
         outputs = model((tensor_img, None))
 
-    score = outputs['det_score'].cpu().tolist()
-    pred_box = outputs['det_bbox_pred'].cpu().tolist()
-    pred_cls = outputs['det_cls_pred'].cpu().tolist()
+    score = outputs[0]['det_score'].cpu().tolist()
+    pred_box = outputs[0]['det_bbox_pred'].cpu().tolist()
+    pred_cls = outputs[0]['det_cls_pred'].cpu().tolist()
 
-    filter_score = score[score > score_threshold]
-    filter_pred_box = pred_box[score > score_threshold]
-    filter_pred_cls = pred_cls[score > score_threshold]
+    filter_pred_bbox = [b for b, s in zip(pred_box, score) if s > score_threshold]
+    filter_score = [s for s in score if s > score_threshold]
+    filter_cls_pred = [c for c, s in zip(pred_cls, score) if s > score_threshold]
 
     img_with_boxes = img.copy()
     draw = ImageDraw.Draw(img_with_boxes)
     font = ImageFont.load_default()
 
-    for idx, box in enumerate(filter_pred_box):
+    for idx, box in enumerate(filter_pred_bbox):
         pred_score = filter_score[idx]
-        pred_cls = filter_pred_cls[idx]
+        pred_cls = filter_cls_pred[idx]
         label = f"predicted class: {object_categories[pred_cls - 1]} ({pred_score:.2f})"
         draw.rectangle(box, outline="red", width=2)
         draw.text((box[0], box[1] - 10), label, fill="red", font=font)
@@ -84,6 +86,7 @@ if __name__ == "__main__":
         filename = image[1]['annotation']['filename'].split('.')[0]
         # img_with_boxes.show()
         save_path = f"./outputs/detection_results/{filename}_result.jpg"
+        os.makedirs(save_path, exist_ok=True)
         img_with_boxes = visualize_single_inference(model, image, device, save_path)
         print(f"Saved image with bounding boxes to {save_path}")
 
