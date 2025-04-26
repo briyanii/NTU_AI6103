@@ -8,4 +8,5 @@
 2. `conda activate MyEnv` activate conda env
 3. `python download.py` to download the required dataset / model weights
 4. `sh train_4step.sh` to run the 4 step training as described in the paper
+5. `sh eval_map.sh` to evaluate mAP for '07 trainval' and '07 test'
 
