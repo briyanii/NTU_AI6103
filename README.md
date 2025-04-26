@@ -9,3 +9,15 @@
 3. `python download.py` to download the required dataset / model weights
 4. `sh train_4step.sh` to run the 4 step training as described in the paper
 
+# Evaluation and Visualization (WIP)
+- mAP calculation and Precision-Recall curve plotting: 
+
+```bash
+python map.py --year \[year of the eval dataset\] --image_set \[train, val, trainval, test\] --model_path \[path to model weights\]
+```
+
+- Detection result visualization
+
+```bash
+python map.py --year \[year of the eval dataset\] --image_set \[train, val, trainval, test\] --model_path \[path to model weights\]
+```

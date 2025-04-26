@@ -4,6 +4,8 @@ from torchvision import transforms
 
 from PIL import Image, ImageDraw, ImageFont
 
+import argparse
+
 from models import FasterRCNN
 
 object_categories = ['aeroplane', 'bicycle', 'bird', 'boat',
@@ -62,14 +64,22 @@ def visualize_single_inference(model, image, device, save_path, score_threshold=
 
 if __name__ == "__main__":
 
+    parser = argparse.ArgumentParser(description="Visualize the results with bounding boxes.")
+
+    parser.add_argument('--year', type=str, default='2007', help='Year of the VOC dataset')
+    parser.add_argument('--image_set', type=str, default='test', help='Image set (train, trainval, val, test)')
+    parser.add_argument('--model_path', type=str, default='./outputs/checkpoint_step4_80000.pt', help='Path to the model checkpoint')
+
+    args = parser.parse_args()
+
     # Load the model
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = FasterRCNN()
     model.to(device)
-    state = torch.load('./outputs/checkpoint_step4_80000.pt', map_location=device)
+    state = torch.load(args.model_path, map_location=device)
     model.load_state_dict(state['model'])
 
-    voc_test = VOCDetection(root='./data', year='2007', image_set='test', download=False)
+    voc_test = VOCDetection(root='./data', year=args.year, image_set=args.image_set, download=False)
     for image in voc_test:
         filename = image[1]['annotation']['filename'].split('.')[0]
         # img_with_boxes.show()

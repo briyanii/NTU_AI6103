@@ -4,6 +4,8 @@ from torchvision.datasets import VOCDetection
 
 import matplotlib.pyplot as plt
 
+import argparse
+
 from models import FasterRCNN
 
 CLASS2IDX = {'aeroplane': 1, 'bicycle': 2, 'bird': 3, 'boat': 4, 
@@ -264,22 +266,32 @@ def compute_precision_recall_ap(class_idx, gt_boxes, pred_boxes, iou_threshold=I
         plt.ylabel('Precision')
         plt.title('Precision-Recall curve')
         plt.grid(True)
-        plt.savefig(f'./outputs/pr_curve_class_{class_idx}.png')
+        plt.savefig(f'./outputs/pr_curves/pr_curve_class_{class_idx}.png')
 
     return ap
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Calculate mAP and plot Precision-Recall curve.")
+
+    parser.add_argument('--year', type=str, default='2007', help='Year of the VOC dataset')
+    parser.add_argument('--image_set', type=str, default='test', help='Image set (train, trainval, val, test)')
+    parser.add_argument('--model_path', type=str, default='./outputs/checkpoint_step4_80000.pt', help='Path to the model checkpoint')
+
+    args = parser.parse_args()
+    
+    
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    gt_box_list_by_class = construct_gt_box_list_by_class(year='2007', image_set='test')
+    gt_box_list_by_class = construct_gt_box_list_by_class(year=args.year, image_set=args.image_set)
 
     # Load model
     model = FasterRCNN()
     model.to(device)
-    state = torch.load('./outputs/checkpoint_step4_80000.pt', map_location=device)
+    state = torch.load(args.model_path, map_location=device)
     model.load_state_dict(state['model'])
 
-    pred_box_list_by_class = construct_pred_box_list_by_class(model, device, year='2007', image_set='test')
+    pred_box_list_by_class = construct_pred_box_list_by_class(model, device, year=args.year, image_set=args.image_set)
 
     ap_per_class = []
     for idx in range(20):
@@ -289,4 +301,3 @@ if __name__ == '__main__':
         ap_per_class.append(ap)
 
     print(f'mAP: {sum(ap_per_class) / len(ap_per_class)}')
-
