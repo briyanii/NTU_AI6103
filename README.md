@@ -15,8 +15,8 @@ This repository attempts to reimplement the Faster RCNN paper from 2015.
 - evaluate mAP for 'voc pascal 07 trainval' and 'voc pascal 07 test'
 
 # Relevant Papers
-- Faster RCNN: https://arxiv.org/pdf/1506.01497v1
-- Fast RCNN: https://arxiv.org/pdf/1504.08083
+- Faster RCNN: https://arxiv.org/abs/1506.01497v1
+- Fast RCNN: https://arxiv.org/abs/1504.08083
 - RCNN: https://arxiv.org/abs/1311.2524
 
 # Experiment Tracking
