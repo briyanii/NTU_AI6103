@@ -21,6 +21,7 @@ parser.add_argument('--iou_threshold', type=float, default=.5)
 parser.add_argument('--n_proposals', type=int, default=300)
 parser.add_argument('--year', type=int, default=2007)
 parser.add_argument('--split', type=str, default='test')
+parser.add_argument('--fname', type=str, default='outputs/results.pkl')
 
 args = parser.parse_args()
 n_classes = args.n_classes
@@ -28,6 +29,7 @@ n_proposals = args.n_proposals
 iou_th = args.iou_threshold
 year = args.year
 split = args.split
+fname = args.fname
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 weight_path = checkpoint_filename_template_4.format(step=80000)
@@ -179,7 +181,6 @@ eval_output = {
     'mAP': mAP,
 }
 
-fname = 'outputs/results.pkl'
 with open(fname, 'wb') as fp:
     pickle.dump(eval_output, fp)
 experiment.log_asset(fname)
