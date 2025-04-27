@@ -100,7 +100,8 @@ class Trainer:
             auto_output_logging=False,
             auto_log_co2=False,
             auto_metric_step_rate=200,
-            log_code=False
+            log_code=False,
+            disabled=os.getenv('COMET_DISABLED', 'False') == 'True',
         )
         self.experiment.add_tag('training')
         for tag in experiment_tags:

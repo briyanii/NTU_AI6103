@@ -20,6 +20,10 @@ This repository attempts to reimplement the Faster RCNN paper from 2015.
 - RCNN: https://arxiv.org/abs/1311.2524
 
 # Experiment Tracking
-The checkpoints every 10K steps during the 4-step training process can be found at https://www.comet.com/ai6103/faster-rcnn/view/new/experiments
-
+- The checkpoints every 10K steps during the 4-step training process can be found at https://www.comet.com/ai6103/faster-rcnn/view/new/experiments
+### Environment Variables
+#### `COMET_DISABLED`
+- set to `True` to disable comet ml logging
+#### `COMET_API_KEY`
+- must be set if `COMET_DISABLED` is not set to "True"
 

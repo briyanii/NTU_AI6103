@@ -1,3 +1,4 @@
+import os
 import sys
 import argparse
 import pickle
@@ -67,7 +68,8 @@ experiment = Experiment(
     auto_metric_logging=False,
     auto_output_logging=False,
     auto_log_co2=False,
-    log_code=False
+    log_code=False,
+    disabled=os.getenv('COMET_DISABLED', 'False') == 'True',
 )
 experiment.add_tag("eval")
 experiment.log_parameters({

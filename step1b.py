@@ -43,7 +43,8 @@ if __name__ == '__main__':
         auto_metric_logging=False,
         auto_output_logging=False,
         auto_log_co2=False,
-        log_code=False
+        log_code=False,
+        disabled=os.getenv('COMET_DISABLED', 'False') == 'True',
     )
     experiment.add_tag("step1b")
     with torch.no_grad():
