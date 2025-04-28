@@ -11,7 +11,9 @@ This repository attempts to reimplement the Faster RCNN paper from 2015.
 - download the VOC Pascal Dataset
 ### 5. `sh train_4step.sh`
 - run the 4-step training process as described in the paper
-### 6. `sh eval_map.sh`
+### 6. `python plot_loss_curve.py`
+- plot loss curves for 4-step alternating training
+### 7. `sh eval_map.sh`
 - evaluate mAP for 'voc pascal 07 trainval' and 'voc pascal 07 test'
 
 # Relevant Papers
