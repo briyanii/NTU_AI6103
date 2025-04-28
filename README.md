@@ -16,7 +16,7 @@ This repository attempts to reimplement the Faster RCNN paper from 2015.
 ### 7. `sh eval_map.sh`
 - evaluate mAP for 'voc pascal 07 trainval' and 'voc pascal 07 test'
 
-### 8. more evaluation scripts
+### 8. `more evaluation scripts`
 - run 'python confusion_matrix.py' for confusion matrix plotting
 - run 'python recall_vs_iou.py' for recall-iou curves plotting
 - run 'python visualize_results.py' for plotting and saving images with ground truth and predicted bounding boxes
