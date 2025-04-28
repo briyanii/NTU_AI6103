@@ -17,7 +17,7 @@ parser.add_argument('--iou_threshold', type=float, default=.5)
 parser.add_argument('--n_proposals', type=int, default=300)
 parser.add_argument('--year', type=int, default=2007)
 parser.add_argument('--split', type=str, default='test')
-parser.add_argument('--model_weight', type=str, default='./outputs/checkpoint_step4_80000-79999.pt')
+parser.add_argument('--model_weight', type=str, default='./outputs/checkpoint_step4_80000.pt')
 
 args = parser.parse_args()
 n_classes = args.n_classes
